@@ -1,0 +1,11 @@
+[package]
+name = "cfg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.32"
+egui = "0.32"
+egui_graphs = "0.26"
+petgraph = "0.8"
+thiserror = "2.0.12"
