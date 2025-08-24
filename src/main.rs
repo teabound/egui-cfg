@@ -7,7 +7,7 @@ use petgraph::{
     algo::is_cyclic_directed,
     graph::{EdgeIndex, NodeIndex},
     stable_graph::StableGraph,
-    visit::EdgeRef,
+    visit::{DfsEvent, EdgeRef, NodeIndexable, depth_first_search},
 };
 use thiserror::Error;
 
@@ -15,11 +15,13 @@ use thiserror::Error;
 pub enum GraphLayoutError {
     #[error("Could not find entry point node in graph.")]
     NoEntryPoint,
+    #[error("Could not find edge in graph.")]
+    NoEdgeFound,
 }
 
 type Result<T> = std::result::Result<T, GraphLayoutError>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Block {
     addr: u64,
     name: &'static str,
@@ -137,6 +139,13 @@ struct GraphLayout {
     removed_edges: Vec<EdgeIndex>,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum EdgeStateDAG {
+    NotVisited,
+    InStack,
+    Visited,
+}
+
 impl GraphLayout {
     fn new(graph: StableGraph<Block, BlockEdge>) -> Self {
         Self {
@@ -185,13 +194,50 @@ impl GraphLayout {
 
         Ok(())
     }
+
+    fn get_dag_edges_and_toposort(&mut self) -> Result<()> {
+        // create a vector of node states, whether or not we've visited it yet, or whatever.
+        // NOTE: not really needed here, maybe if we have disconnected nodes then revisit.
+        // let mut state = vec![EdgeStateDAG::NotVisited; self.graph.node_bound()];
+
+        let entry = self.get_entry_node()?;
+
+        // this will contain the reverse topological order of the nodes.
+        // a.k.a pushed to when we finish DFS a node.
+        let mut reverse_order_nodes: Vec<NodeIndex> = Vec::new();
+
+        // edges that make up valid DAG edges, i.e. don't contain cycle edges.
+        let mut dag_edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
+
+        depth_first_search(&self.graph, [entry], |event| match event {
+            DfsEvent::Discover(_, _) => (),
+            DfsEvent::TreeEdge(u, v) => dag_edges.push((u, v)),
+            // NOTE: maybe push this edge to the removed edges member?
+            DfsEvent::BackEdge(_, _) => (),
+            DfsEvent::CrossForwardEdge(u, v) => dag_edges.push((u, v)),
+            DfsEvent::Finish(n, _) => reverse_order_nodes.push(n),
+        });
+
+        // map this into edge indicies.
+        // dag_edges.push(self.graph.find_edge(u, v).());
+
+        reverse_order_nodes.reverse();
+
+        println!(
+            "{:#?}",
+            reverse_order_nodes
+                .iter()
+                .map(|&n| self.graph[n].name)
+                .collect::<Vec<_>>()
+        );
+        unimplemented!()
+    }
 }
 
 fn main() -> eframe::Result<()> {
     let mut graph_layout = GraphLayout::new(build_dummy_cfg());
 
-    // remove cycles.
-    graph_layout.remove_cycles().unwrap();
+    graph_layout.get_dag_edges_and_toposort().unwrap();
 
     eframe::run_native(
         "CFG",
@@ -217,4 +263,3 @@ impl eframe::App for MyApp {
         });
     }
 }
-
