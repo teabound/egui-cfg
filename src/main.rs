@@ -2,9 +2,7 @@ use eframe::{App, egui};
 use egui::{
     Align2, Color32, CornerRadius, FontId, Pos2, Rect, Scene, Shape, Stroke, Vec2, pos2, vec2,
 };
-use egui_graphs::{DrawContext, SettingsInteraction, SettingsNavigation, SettingsStyle};
 use petgraph::{
-    algo::is_cyclic_directed,
     graph::{EdgeIndex, NodeIndex},
     stable_graph::StableGraph,
     visit::{DfsEvent, EdgeRef, NodeIndexable, depth_first_search},
@@ -133,10 +131,14 @@ struct MyApp {
 }
 
 #[derive(Clone)]
-struct GraphLayout {
+pub struct GraphLayout {
     graph: StableGraph<Block, BlockEdge>,
+    /// The entry point node of the CFG.
     entry_node: Option<NodeIndex>,
+    /// Back edges not picked up by the DFS.
     removed_edges: Vec<EdgeIndex>,
+    /// Contains the row position a node is at.
+    graph_row: Vec<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -149,9 +151,10 @@ enum EdgeStateDAG {
 impl GraphLayout {
     fn new(graph: StableGraph<Block, BlockEdge>) -> Self {
         Self {
-            graph,
+            graph_row: vec![0; graph.node_bound()],
             entry_node: None,
             removed_edges: Vec::new(),
+            graph,
         }
     }
 
@@ -174,28 +177,7 @@ impl GraphLayout {
         Ok(node)
     }
 
-    fn remove_cycles(&mut self) -> Result<()> {
-        // if the graph is acyclical then we don't need to remove cycles.
-        if !is_cyclic_directed(&self.graph) {
-            return Ok(());
-        }
-
-        // get the feedback arc set from the graph, so that we can remove the cycle creating edges.
-        let fas: Vec<EdgeIndex> = petgraph::algo::greedy_feedback_arc_set(&self.graph)
-            .map(|e| e.id())
-            .collect();
-
-        // remove every edge that causes a cycle in the graph.
-        fas.iter().for_each(|&e| {
-            self.graph.remove_edge(e);
-        });
-
-        self.removed_edges = fas;
-
-        Ok(())
-    }
-
-    fn get_dag_edges_and_toposort(&mut self) -> Result<()> {
+    fn get_dag_edges_and_toposort(&mut self) -> Result<(Vec<EdgeIndex>, Vec<NodeIndex>)> {
         // create a vector of node states, whether or not we've visited it yet, or whatever.
         // NOTE: not really needed here, maybe if we have disconnected nodes then revisit.
         // let mut state = vec![EdgeStateDAG::NotVisited; self.graph.node_bound()];
@@ -218,26 +200,50 @@ impl GraphLayout {
             DfsEvent::Finish(n, _) => reverse_order_nodes.push(n),
         });
 
-        // map this into edge indicies.
-        // dag_edges.push(self.graph.find_edge(u, v).());
-
+        // convert them into topological order.
         reverse_order_nodes.reverse();
 
-        println!(
-            "{:#?}",
-            reverse_order_nodes
+        Ok((
+            dag_edges
                 .iter()
-                .map(|&n| self.graph[n].name)
-                .collect::<Vec<_>>()
-        );
-        unimplemented!()
+                .map(|(u, v)| {
+                    // map them into edge indices, rather than keeping them "pseudo" edges.
+                    self.graph
+                        .find_edge(*u, *v)
+                        .ok_or(GraphLayoutError::NoEdgeFound)
+                })
+                .collect::<Result<_>>()?,
+            reverse_order_nodes,
+        ))
+    }
+
+    fn assign_rows(&mut self) -> Result<()> {
+        let (edges, sorted) = self.get_dag_edges_and_toposort()?;
+
+        for &u in sorted.iter() {
+            let base_node_value = self.graph_row[u.index()];
+
+            // filter through the edges whose source is `u`.
+            for (_, dst) in edges
+                .iter()
+                .map(|&e| self.graph.edge_endpoints(e).unwrap())
+                .filter(|(s, _)| *s == u)
+                .collect::<Vec<(NodeIndex, NodeIndex)>>()
+            {
+                // make it so that we increase all outward nodes' row value, but we also protect
+                // against forward and and cross edges by getting the max of its value or the "new" value.
+                self.graph_row[dst.index()] = self.graph_row[dst.index()].max(base_node_value + 1);
+            }
+        }
+
+        Ok(())
     }
 }
 
 fn main() -> eframe::Result<()> {
     let mut graph_layout = GraphLayout::new(build_dummy_cfg());
 
-    graph_layout.get_dag_edges_and_toposort().unwrap();
+    graph_layout.assign_rows().unwrap();
 
     eframe::run_native(
         "CFG",
