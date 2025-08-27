@@ -1,11 +1,9 @@
-use eframe::{App, egui};
-use egui::{
-    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Scene, Shape, Stroke, Vec2, pos2, vec2,
-};
+use eframe::{App, egui, glow::DEPTH_STENCIL};
+use egui::{Color32, FontId, Pos2, Rect, Scene, Shape, Stroke, Vec2, pos2, vec2};
 use petgraph::{
     graph::{EdgeIndex, NodeIndex},
     stable_graph::StableGraph,
-    visit::{DfsEvent, EdgeRef, NodeIndexable, depth_first_search},
+    visit::{DfsEvent, NodeIndexable, depth_first_search},
 };
 use thiserror::Error;
 
@@ -139,6 +137,10 @@ pub struct GraphLayout {
     removed_edges: Vec<EdgeIndex>,
     /// Contains the row position a node is at.
     graph_row: Vec<usize>,
+    /// All edges that are part of the DAG.
+    target_edges: Vec<EdgeIndex>,
+    /// Topologically sorted DAG nodes.
+    sorted: Vec<NodeIndex>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -155,6 +157,8 @@ impl GraphLayout {
             entry_node: None,
             removed_edges: Vec::new(),
             graph,
+            target_edges: Vec::new(),
+            sorted: Vec::new(),
         }
     }
 
@@ -177,7 +181,7 @@ impl GraphLayout {
         Ok(node)
     }
 
-    fn get_dag_edges_and_toposort(&mut self) -> Result<(Vec<EdgeIndex>, Vec<NodeIndex>)> {
+    fn set_dag_edges_and_toposort(&mut self) -> Result<()> {
         // create a vector of node states, whether or not we've visited it yet, or whatever.
         // NOTE: not really needed here, maybe if we have disconnected nodes then revisit.
         // let mut state = vec![EdgeStateDAG::NotVisited; self.graph.node_bound()];
@@ -203,22 +207,23 @@ impl GraphLayout {
         // convert them into topological order.
         reverse_order_nodes.reverse();
 
-        Ok((
-            dag_edges
-                .iter()
-                .map(|(u, v)| {
-                    // map them into edge indices, rather than keeping them "pseudo" edges.
-                    self.graph
-                        .find_edge(*u, *v)
-                        .ok_or(GraphLayoutError::NoEdgeFound)
-                })
-                .collect::<Result<_>>()?,
-            reverse_order_nodes,
-        ))
+        self.target_edges = dag_edges
+            .iter()
+            .map(|(u, v)| {
+                // map them into edge indices, rather than keeping them "pseudo" edges.
+                self.graph
+                    .find_edge(*u, *v)
+                    .ok_or(GraphLayoutError::NoEdgeFound)
+            })
+            .collect::<Result<_>>()?;
+
+        self.sorted = reverse_order_nodes;
+
+        Ok(())
     }
 
     fn assign_rows(&mut self) -> Result<()> {
-        let (edges, sorted) = self.get_dag_edges_and_toposort()?;
+        let (edges, sorted) = (&self.target_edges, &self.sorted);
 
         for &u in sorted.iter() {
             let base_node_value = self.graph_row[u.index()];
@@ -238,12 +243,38 @@ impl GraphLayout {
 
         Ok(())
     }
+
+    fn select_tree(&mut self) -> Result<Vec<EdgeIndex>> {
+        // keep track of whether the node has a parent in an upper level/row/layer.
+        let mut has_parent = vec![false; self.graph.node_bound()];
+
+        // collect spanning tree edges.
+        let mut tree = Vec::new();
+
+        for &edge in self.target_edges.iter() {
+            let (u, v) = self
+                .graph
+                .edge_endpoints(edge)
+                .ok_or(GraphLayoutError::NoEdgeFound)?;
+
+            // take edge only if it goes one row downward and the child has no parent yet.
+            if self.graph_row[u.index()] + 1 == self.graph_row[v.index()] && !has_parent[v.index()]
+            {
+                tree.push(edge);
+                has_parent[v.index()] = true;
+            }
+        }
+
+        Ok(tree)
+    }
 }
 
 fn main() -> eframe::Result<()> {
     let mut graph_layout = GraphLayout::new(build_dummy_cfg());
 
+    graph_layout.set_dag_edges_and_toposort().unwrap();
     graph_layout.assign_rows().unwrap();
+    graph_layout.select_tree().unwrap();
 
     eframe::run_native(
         "CFG",
