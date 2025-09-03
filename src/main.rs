@@ -1,10 +1,14 @@
-use eframe::{App, egui, glow::DEPTH_STENCIL};
-use egui::{Color32, FontId, Pos2, Rect, Scene, Shape, Stroke, Vec2, pos2, vec2};
+use eframe::egui;
+use egui::{
+    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Rounding, Scene, Shape, Stroke, StrokeKind,
+    TextStyle, Vec2, pos2, vec2,
+};
 use petgraph::{
     graph::{EdgeIndex, NodeIndex},
     stable_graph::StableGraph,
     visit::{DfsEvent, NodeIndexable, depth_first_search},
 };
+use rust_sugiyama::configure::Config;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -28,11 +32,12 @@ struct Block {
 
 #[derive(Clone)]
 enum BlockEdge {
-    FT,
-    Jmp,
     Taken,
+    FallThrough,
+    Unconditional,
 }
 
+#[derive(Clone)]
 pub struct NodeStyle {
     pub size: egui::Vec2,
     pub padding: egui::Vec2,
@@ -51,23 +56,72 @@ pub struct NodeStyle {
     pub side_lane: f32,
 }
 
+impl NodeStyle {
+    pub fn from_style(style: &egui::Style) -> Self {
+        let mono = style
+            .text_styles
+            .get(&TextStyle::Monospace)
+            .cloned()
+            .unwrap_or(FontId::monospace(12.0));
+
+        let body = style
+            .text_styles
+            .get(&TextStyle::Body)
+            .cloned()
+            .unwrap_or(FontId::proportional(12.0));
+
+        let visuals = &style.visuals;
+        let non_interactive = &visuals.widgets.noninteractive;
+        let inactive = &visuals.widgets.inactive;
+        let spacing = &style.spacing;
+
+        // code block bg or noninteractive bg.
+        let fill = visuals.code_bg_color;
+
+        // header a tad stronger.
+        let header_fill = inactive.bg_fill;
+
+        // stroke noninteractive outline/fg.
+        let stroke = non_interactive.bg_stroke;
+
+        // rounding and paddings from style.
+        let rounding = non_interactive.rounding().nw;
+        let padding = spacing.button_padding;
+
+        // use default height of button, and other widgets for the header.
+        let header_height = spacing.interact_size.y;
+
+        // arrow head stuff, which we might not use.
+        let arrow_len = spacing.icon_width;
+        let arrow_w = spacing.icon_width_inner;
+
+        // just give this a magic value for now.
+        let side_lane = spacing.indent * 3.0;
+
+        // NOTE: we'll set this to some dummy value for now and just change it later.
+        let size = vec2(260.0, 120.0);
+
+        Self {
+            size,
+            padding,
+            rounding,
+            fill,
+            header_fill,
+            stroke,
+            header_h: header_height,
+            label_font: mono.clone(),
+            text_font: mono, // monospace body for code
+            edge: non_interactive.fg_stroke,
+            arrow_len,
+            arrow_w,
+            side_lane,
+        }
+    }
+}
+
 impl Default for NodeStyle {
     fn default() -> Self {
-        Self {
-            size: Vec2::new(240.0, 100.0),
-            padding: Vec2::new(8.0, 6.0),
-            rounding: 8,
-            fill: Color32::from_rgb(27, 31, 39),
-            header_fill: Color32::from_rgb(40, 44, 54),
-            stroke: Stroke::new(1.0, Color32::from_gray(70)),
-            header_h: 22.0,
-            label_font: FontId::monospace(12.0),
-            text_font: FontId::monospace(12.0),
-            edge: Stroke::new(1.8, Color32::from_rgb(210, 210, 230)),
-            arrow_len: 10.0,
-            arrow_w: 7.0,
-            side_lane: 120.0,
-        }
+        Self::from_style(&egui::Style::default())
     }
 }
 
@@ -114,178 +168,157 @@ fn build_dummy_cfg() -> StableGraph<Block, BlockEdge> {
         exit: true,
     });
 
-    g.add_edge(entry, cond, BlockEdge::FT);
+    g.add_edge(entry, cond, BlockEdge::FallThrough);
     g.add_edge(cond, then_, BlockEdge::Taken);
-    g.add_edge(cond, else_, BlockEdge::FT);
-    g.add_edge(then_, exit, BlockEdge::Jmp);
-    g.add_edge(else_, exit, BlockEdge::Jmp);
+    g.add_edge(cond, else_, BlockEdge::FallThrough);
+    g.add_edge(then_, exit, BlockEdge::Unconditional);
+    g.add_edge(else_, exit, BlockEdge::Unconditional);
 
     g
+}
+
+fn approx_block_height(block: &Block, style: &NodeStyle) -> f32 {
+    // crude but effective: monospace lines ~= 1.25 * point size
+    let line_h = style.text_font.size * 1.25;
+    let body_h = (block.code.len() as f32) * line_h;
+    style.header_h + style.padding.y + body_h + style.padding.y
+}
+
+struct GraphLayout {
+    /// Contain the coordinates for the node, and the node itself.
+    coordinates: Vec<(NodeIndex, (f64, f64))>,
+    width: f64,
+    height: f64,
 }
 
 struct MyApp {
     scene_rect: Rect,
     gl: GraphLayout,
-}
-
-#[derive(Clone)]
-pub struct GraphLayout {
     graph: StableGraph<Block, BlockEdge>,
-    /// The entry point node of the CFG.
-    entry_node: Option<NodeIndex>,
-    /// Back edges not picked up by the DFS.
-    removed_edges: Vec<EdgeIndex>,
-    /// Contains the row position a node is at.
-    graph_row: Vec<usize>,
-    /// All edges that are part of the DAG.
-    target_edges: Vec<EdgeIndex>,
-    /// Topologically sorted DAG nodes.
-    sorted: Vec<NodeIndex>,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum EdgeStateDAG {
-    NotVisited,
-    InStack,
-    Visited,
-}
-
-impl GraphLayout {
-    fn new(graph: StableGraph<Block, BlockEdge>) -> Self {
-        Self {
-            graph_row: vec![0; graph.node_bound()],
-            entry_node: None,
-            removed_edges: Vec::new(),
-            graph,
-            target_edges: Vec::new(),
-            sorted: Vec::new(),
-        }
-    }
-
-    fn get_entry_node(&mut self) -> Result<NodeIndex> {
-        // if we've already found the entry then return it.
-        if let Some(i) = self.entry_node {
-            return Ok(i);
-        }
-
-        // find the node that is marked as the entry point.
-        let node = self
-            .graph
-            .node_indices()
-            .find(|&i| self.graph[i].entry)
-            .ok_or(GraphLayoutError::NoEntryPoint)?;
-
-        // store the node marked as the entry point.
-        self.entry_node = Some(node);
-
-        Ok(node)
-    }
-
-    fn set_dag_edges_and_toposort(&mut self) -> Result<()> {
-        // create a vector of node states, whether or not we've visited it yet, or whatever.
-        // NOTE: not really needed here, maybe if we have disconnected nodes then revisit.
-        // let mut state = vec![EdgeStateDAG::NotVisited; self.graph.node_bound()];
-
-        let entry = self.get_entry_node()?;
-
-        // this will contain the reverse topological order of the nodes.
-        // a.k.a pushed to when we finish DFS a node.
-        let mut reverse_order_nodes: Vec<NodeIndex> = Vec::new();
-
-        // edges that make up valid DAG edges, i.e. don't contain cycle edges.
-        let mut dag_edges: Vec<(NodeIndex, NodeIndex)> = Vec::new();
-
-        depth_first_search(&self.graph, [entry], |event| match event {
-            DfsEvent::Discover(_, _) => (),
-            DfsEvent::TreeEdge(u, v) => dag_edges.push((u, v)),
-            // NOTE: maybe push this edge to the removed edges member?
-            DfsEvent::BackEdge(_, _) => (),
-            DfsEvent::CrossForwardEdge(u, v) => dag_edges.push((u, v)),
-            DfsEvent::Finish(n, _) => reverse_order_nodes.push(n),
-        });
-
-        // convert them into topological order.
-        reverse_order_nodes.reverse();
-
-        self.target_edges = dag_edges
-            .iter()
-            .map(|(u, v)| {
-                // map them into edge indices, rather than keeping them "pseudo" edges.
-                self.graph
-                    .find_edge(*u, *v)
-                    .ok_or(GraphLayoutError::NoEdgeFound)
-            })
-            .collect::<Result<_>>()?;
-
-        self.sorted = reverse_order_nodes;
-
-        Ok(())
-    }
-
-    fn assign_rows(&mut self) -> Result<()> {
-        let (edges, sorted) = (&self.target_edges, &self.sorted);
-
-        for &u in sorted.iter() {
-            let base_node_value = self.graph_row[u.index()];
-
-            // filter through the edges whose source is `u`.
-            for (_, dst) in edges
-                .iter()
-                .map(|&e| self.graph.edge_endpoints(e).unwrap())
-                .filter(|(s, _)| *s == u)
-                .collect::<Vec<(NodeIndex, NodeIndex)>>()
-            {
-                // make it so that we increase all outward nodes' row value, but we also protect
-                // against forward and and cross edges by getting the max of its value or the "new" value.
-                self.graph_row[dst.index()] = self.graph_row[dst.index()].max(base_node_value + 1);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn select_tree(&mut self) -> Result<Vec<EdgeIndex>> {
-        // keep track of whether the node has a parent in an upper level/row/layer.
-        let mut has_parent = vec![false; self.graph.node_bound()];
-
-        // collect spanning tree edges.
-        let mut tree = Vec::new();
-
-        for &edge in self.target_edges.iter() {
-            let (u, v) = self
-                .graph
-                .edge_endpoints(edge)
-                .ok_or(GraphLayoutError::NoEdgeFound)?;
-
-            // take edge only if it goes one row downward and the child has no parent yet.
-            if self.graph_row[u.index()] + 1 == self.graph_row[v.index()] && !has_parent[v.index()]
-            {
-                tree.push(edge);
-                has_parent[v.index()] = true;
-            }
-        }
-
-        Ok(tree)
-    }
+    style: NodeStyle,
 }
 
 fn main() -> eframe::Result<()> {
-    let mut graph_layout = GraphLayout::new(build_dummy_cfg());
+    let style = NodeStyle::default();
 
-    graph_layout.set_dag_edges_and_toposort().unwrap();
-    graph_layout.assign_rows().unwrap();
-    graph_layout.select_tree().unwrap();
+    let style_for_layout = style.clone();
+    let vertex_size = move |_: NodeIndex<u32>, b: &Block| {
+        let w = style_for_layout.size.x;
+        let h = approx_block_height(b, &style_for_layout);
+        (w as f64, h as f64)
+    };
+
+    let graph = build_dummy_cfg();
+
+    let layout_information = rust_sugiyama::from_graph(
+        &graph,
+        &vertex_size,
+        &Config {
+            vertex_spacing: 5.0,
+            ..Default::default()
+        },
+    )[0]
+    .clone();
+
+    let gl = GraphLayout {
+        coordinates: layout_information.0,
+        width: layout_information.1,
+        height: layout_information.2,
+    };
 
     eframe::run_native(
         "CFG",
         eframe::NativeOptions::default(),
         Box::new(|_cc| {
             Ok(Box::new(MyApp {
-                scene_rect: Rect::from_min_size(pos2(-1000.0, -1000.0), vec2(3000.0, 2000.0)),
-                gl: graph_layout,
+                scene_rect: Rect::from_min_size(pos2(-2000.0 * 0.5, -1000.0), vec2(2000.0, 2000.0)),
+                gl,
+                graph,
+                style,
             }))
         }),
     )
+}
+
+fn draw_block_in_ui(ui: &mut egui::Ui, x: f32, y: f32, block: &Block, style: &NodeStyle) {
+    // where the block that we're going to draw starts.
+    let block_position = ui.min_rect().min + Vec2::new(x, y);
+
+    // get the width of the content (the size of the node without the padding).
+    let content_width = style.size.x - style.padding.x * 2.0;
+
+    let body_text = block.code.join("\n");
+
+    // get the text galley so we can get information related to it.
+    let body_galley = ui.fonts(|f| {
+        f.layout(
+            body_text,
+            style.text_font.clone(),
+            Color32::WHITE,
+            content_width,
+        )
+    });
+
+    // ge the total size of the height including the padding, the text and the header.
+    let block_height = style.header_h + style.padding.y * 2.0 + body_galley.size().y;
+
+    // create a rectangle starting from the start of our block and is the size we've calculated
+    // from the content in the block.
+    let block_rectangle = Rect::from_min_size(block_position, vec2(style.size.x, block_height));
+
+    let corner_rounding = CornerRadius::same(style.rounding);
+
+    // draw the entire node block.
+    ui.painter().rect(
+        block_rectangle,
+        corner_rounding,
+        style.fill,
+        style.stroke,
+        StrokeKind::Inside,
+    );
+
+    // the header rectangle, width is the size of the block, then we just add the header height.
+    let header_rectangle = Rect::from_min_max(
+        block_rectangle.min,
+        pos2(
+            block_rectangle.max.x,
+            block_rectangle.min.y + style.header_h,
+        ),
+    );
+
+    ui.painter().rect(
+        header_rectangle,
+        CornerRadius {
+            nw: style.rounding,
+            ne: style.rounding,
+            se: 0,
+            sw: 0,
+        },
+        style.header_fill,
+        Stroke::NONE,
+        StrokeKind::Inside,
+    );
+
+    // block title, could be empty or not.
+    let label = format!("{}", block.name);
+    // NOTE: have an option to put the title in the middle of the header rectangle.
+    let label_pos = header_rectangle.left_center() + vec2(style.padding.x, 0.0);
+
+    ui.painter().text(
+        label_pos,
+        Align2::LEFT_CENTER,
+        label,
+        style.label_font.clone(),
+        Color32::WHITE,
+    );
+
+    // Body text
+    let text_pos = pos2(
+        block_rectangle.min.x + style.padding.x,
+        header_rectangle.max.y + style.padding.y,
+    );
+
+    ui.painter().galley(text_pos, body_galley, Color32::WHITE);
 }
 
 impl eframe::App for MyApp {
@@ -295,7 +328,11 @@ impl eframe::App for MyApp {
                 .max_inner_size([350.0, 1000.0])
                 .zoom_range(0.1..=2.0)
                 .show(ui, &mut self.scene_rect, |ui| {
-                    ui.label("test");
+                    for data in self.gl.coordinates.iter() {
+                        let (node, (x, y)) = data;
+                        let b = &self.graph[*node];
+                        draw_block_in_ui(ui, *x as f32, *y as f32, b, &self.style);
+                    }
                 });
         });
     }
