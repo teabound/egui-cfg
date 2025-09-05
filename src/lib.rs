@@ -7,10 +7,11 @@ use crate::types::BlockLike;
 use petgraph::{graph::NodeIndex, stable_graph::StableGraph};
 
 #[derive(Clone, Debug)]
-pub struct CfgLayout {
+pub struct CfgLayout<N: BlockLike + Clone, E: Clone> {
     pub coords: Vec<(NodeIndex, (f64, f64))>,
     pub width: f64,
     pub height: f64,
+    pub graph: StableGraph<N, E>,
 }
 
 #[derive(Clone, Debug)]
@@ -36,11 +37,11 @@ impl From<&LayoutConfig> for rust_sugiyama::configure::Config {
     }
 }
 
-pub fn layout_graph<N: BlockLike, E: Clone>(
+pub fn layout_graph<N: BlockLike + Clone, E: Clone>(
     graph: &StableGraph<N, E>,
     style: &NodeStyle,
     config: &LayoutConfig,
-) -> CfgLayout {
+) -> CfgLayout<N, E> {
     // we approximate the size of the node so sugiyama can place vertices accordingly.
     let vertex_size = |_: NodeIndex, n: &N| {
         let w = style.size.x as f64;
@@ -57,5 +58,6 @@ pub fn layout_graph<N: BlockLike, E: Clone>(
         coords,
         width,
         height,
+        graph: graph.clone(),
     }
 }

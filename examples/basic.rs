@@ -78,8 +78,7 @@ fn build_dummy_cfg() -> StableGraph<BasicBlock, EdgeKind> {
 }
 
 struct App {
-    graph: StableGraph<BasicBlock, EdgeKind>,
-    layout: CfgLayout,
+    layout: CfgLayout<BasicBlock, EdgeKind>,
     style: NodeStyle,
     scene_rect: Rect,
 }
@@ -87,12 +86,7 @@ struct App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            CfgView {
-                graph: &self.graph,
-                layout: &self.layout,
-                style: &self.style,
-            }
-            .show(ui, &mut self.scene_rect);
+            CfgView::new(&self.layout, &self.style).show(ui, &mut self.scene_rect);
         });
     }
 }
@@ -104,7 +98,7 @@ fn main() -> eframe::Result<()> {
         &graph,
         &style,
         &LayoutConfig {
-            vertex_spacing: 5.0,
+            vertex_spacing: 15.0,
         },
     );
 
@@ -115,7 +109,6 @@ fn main() -> eframe::Result<()> {
         eframe::NativeOptions::default(),
         Box::new(|_| {
             Ok(Box::new(App {
-                graph,
                 layout,
                 style,
                 scene_rect,
