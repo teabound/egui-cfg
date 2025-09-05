@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe = "0.32"
 egui = "0.32"
 egui_graphs = "0.26"
 petgraph = "0.6.4"
 thiserror = "2.0.12"
 rust-sugiyama = { git = "https://github.com/paddison/rust-sugiyama.git" }
+
+[dev-dependencies]
+eframe = "0.32"
