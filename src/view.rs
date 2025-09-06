@@ -7,7 +7,8 @@ use egui::epaint::CubicBezierShape;
 use egui::{
     Align2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
-use petgraph::graph::NodeIndex;
+use petgraph::graph::{EdgeIndex, NodeIndex};
+use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 
 pub struct CfgView<'a, N: BlockLike + Clone, E: Clone> {
     pub layout: &'a CfgLayout<N, E>,
@@ -167,6 +168,92 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
         }
     }
 
+    /// This will assign a port "edge", from one port to another.
+    ///
+    /// For every node in the in the graph connect each outgoing to port to an incoming port.
+    fn assign_port_lines(&mut self) {
+        let center_x = |n: NodeIndex| {
+            self.block_rects
+                .get(&n)
+                .map(|r| r.center().x)
+                .unwrap_or(0.0)
+        };
+
+        let sorted_ports = |node: NodeIndex, kind: PortKind| -> Vec<PortSlot> {
+            let mut target_ports: Vec<(PortSlot, f32)> = self
+                .port_positions
+                .iter()
+                .filter_map(|(slot, pos)| {
+                    // get the target slots from the target node, which are `kind`.
+                    (slot.node == node && slot.kind == kind).then_some((*slot, pos.x))
+                })
+                .collect();
+
+            // yes, it's super weird to sort f32s, but whatever.
+            target_ports.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+            target_ports.into_iter().map(|(slot, _)| slot).collect()
+        };
+
+        for node in self.layout.graph.node_indices() {
+            let ports = sorted_ports(node, PortKind::Output);
+
+            if ports.is_empty() {
+                continue;
+            }
+
+            let mut sorted_out_edges: Vec<(petgraph::graph::EdgeIndex, NodeIndex)> = self
+                .layout
+                .graph
+                .edges_directed(node, petgraph::Direction::Outgoing)
+                .map(|e| (e.id(), e.target()))
+                .collect();
+
+            if sorted_out_edges.is_empty() {
+                continue;
+            }
+
+            // yes, it's super weird to sort f32s, but whatever.
+            sorted_out_edges
+                .sort_by(|(_, lhs), (_, rhs)| center_x(*lhs).total_cmp(&center_x(*rhs)));
+
+            // we associate each outgoing edge with an outgoing port.
+            for (n, (edge, target_node)) in sorted_out_edges.iter().enumerate() {
+                let Some(&from_port) = ports.get(n) else {
+                    continue;
+                };
+
+                let target_ports = sorted_ports(*target_node, PortKind::Input);
+
+                if target_ports.is_empty() {
+                    continue;
+                }
+
+                // collect and sort the incoming edges from the target node.
+                let mut incoming: Vec<(petgraph::graph::EdgeIndex, NodeIndex)> = self
+                    .layout
+                    .graph
+                    .edges_directed(*target_node, petgraph::Direction::Incoming)
+                    .map(|e| (e.id(), e.source()))
+                    .collect();
+
+                incoming.sort_by(|(_, lhs), (_, rhs)| center_x(*lhs).total_cmp(&center_x(*rhs)));
+
+                // we want to get the port offset at the same index of the edge.
+                let target_port = incoming.iter().position(|(e, _)| e == edge).unwrap_or(0);
+
+                let Some(&to_port) = target_ports.get(target_port) else {
+                    continue;
+                };
+
+                self.port_lines.push(PortLine {
+                    from: from_port,
+                    to: to_port,
+                });
+            }
+        }
+    }
+
     pub fn show(&mut self, ui: &mut Ui, scene_rect: &mut Rect) {
         egui::Scene::new()
             .max_inner_size([
@@ -193,6 +280,8 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
                         self.draw_ports_for_node(ui, node, rect, inputs, outputs);
                     }
                 }
+
+                self.assign_port_lines();
             });
     }
 }
