@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use crate::CfgLayout;
 use crate::style::NodeStyle;
 use crate::types::{BlockLike, EdgeKind, PortKind, PortLine, PortSlot};
-use egui::epaint::CubicBezierShape;
 use egui::{
     Align2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
