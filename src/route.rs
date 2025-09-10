@@ -1,9 +1,13 @@
 use core::f32;
+use std::{
+    collections::{HashMap, HashSet},
+    future::pending,
+};
 
 pub type GridCoord = (usize, usize);
 
 #[derive(Clone, Copy, Debug)]
-struct Grid {
+pub struct Grid {
     origin: egui::Pos2,
     cols: usize,
     rows: usize,
@@ -50,13 +54,13 @@ impl Grid {
 }
 
 #[derive(Clone)]
-struct CostField {
+pub struct CostField {
     cost: Vec<f32>,
     grid: Grid,
 }
 
 impl CostField {
-    fn new(grid: Grid) -> Self {
+    pub fn new(grid: Grid) -> Self {
         Self {
             cost: vec![1.0; grid.cols * grid.rows],
             grid,
@@ -67,7 +71,7 @@ impl CostField {
         &mut self.cost[self.grid.to_index(coords)]
     }
 
-    fn add_block_rect(&mut self, block_rectangle: egui::Rect, margin: f32) {
+    pub fn add_block_rect(&mut self, block_rectangle: egui::Rect, margin: f32) {
         // we expand the rectangle by the margin so that we increase the "hitbox".
         let block_rectangle = block_rectangle.expand(margin);
 
@@ -135,5 +139,119 @@ impl CostField {
                 }
             }
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct CellBase {
+    g: f32,
+    h: f32,
+    parent: Option<GridCoord>,
+    is_pending: bool,
+    visited: bool,
+}
+
+impl CellBase {
+    const fn new() -> Self {
+        Self {
+            g: f32::INFINITY,
+            h: 0.0,
+            parent: None,
+            is_pending: false,
+            visited: false,
+        }
+    }
+
+    const fn f(&self) -> f32 {
+        self.g + self.h
+    }
+}
+
+pub struct AStar<'a> {
+    field: &'a CostField,
+    /// We map grid coordinates to cell information.
+    cells: HashMap<GridCoord, CellBase>,
+    pending: Vec<GridCoord>,
+}
+
+impl<'a> AStar<'a> {
+    fn new(field: &'a CostField) -> Self {
+        Self {
+            field,
+            cells: HashMap::new(),
+            pending: Vec::new(),
+        }
+    }
+
+    /// Manhattan distance that we use for our A* H cost calculation.
+    const fn manhattan(a: GridCoord, b: GridCoord) -> usize {
+        a.0 - b.0 + a.1 - b.1
+    }
+
+    fn pop_best(&mut self) -> GridCoord {
+        let mut best_i = 0usize;
+        let mut best_f = f32::INFINITY;
+
+        // scan every cell currently waiting to be explored.
+        for (i, coords) in self.pending.iter().enumerate() {
+            let f = self
+                .cells
+                .get(coords)
+                .map(|c| c.f())
+                .unwrap_or(f32::INFINITY);
+
+            // set the minimum f value as best, and its index.
+            if f < best_f {
+                best_f = f;
+                best_i = i;
+            }
+        }
+
+        // remove that best one from the pending list and return it
+        self.pending.swap_remove(best_i)
+    }
+
+    pub fn find_path(&mut self, start: egui::Pos2, end: egui::Pos2) -> Option<Vec<egui::Pos2>> {
+        // get the starting cell.
+        let start = self.field.grid.to_cell(start);
+
+        // get the ending cell.
+        let end = self.field.grid.to_cell(end);
+
+        self.cells = HashMap::new();
+
+        // place the starting coordinate into the pending vector.
+        self.pending = vec![start];
+
+        let mut seen: HashSet<GridCoord> = HashSet::new();
+
+        let start_cell = CellBase {
+            g: 0.0,
+            h: Self::manhattan(start, end) as _,
+            parent: None,
+            is_pending: true,
+            visited: false,
+        };
+
+        self.cells.insert(start, start_cell);
+
+        seen.insert(start);
+
+        while !self.pending.is_empty() {
+            // get the currently best cell.
+            let current_cell = self.pop_best();
+
+            if let Some(current_cell) = self.cells.get_mut(&current_cell) {
+                current_cell.is_pending = false;
+
+                if current_cell.visited {
+                    unimplemented!()
+                }
+
+                current_cell.visited = true;
+            }
+        }
+
+        None
     }
 }
