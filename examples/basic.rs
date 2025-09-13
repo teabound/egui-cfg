@@ -98,7 +98,7 @@ fn main() -> eframe::Result<()> {
         &graph,
         &style,
         &LayoutConfig {
-            vertex_spacing: 15.0,
+            vertex_spacing: 30.0,
         },
     );
 

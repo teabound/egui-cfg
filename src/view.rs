@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::CfgLayout;
+use crate::route::{AStar, CostField, Grid};
 use crate::style::NodeStyle;
 use crate::types::{BlockLike, EdgeKind, PortKind, PortLine, PortSlot};
 use egui::{
@@ -139,7 +140,16 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
         inputs: usize,
         outputs: usize,
     ) {
-        let mut draw_port = |pid: PortSlot, pos: Pos2| {
+        let mut draw_port = |pid: PortSlot, mut pos: Pos2| {
+            let y = 4.0;
+
+            // we offset so the ports don't overlap with the basic block rectangles.
+            pos.y += if matches!(pid.kind, PortKind::Input) {
+                -y
+            } else {
+                y
+            };
+
             let radius = self.style.edge.width * 3.0;
 
             // draw the first cricle, just the edge outline.
@@ -253,6 +263,47 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
         }
     }
 
+    fn build_field(&self, scene: egui::Rect) -> CostField {
+        let grid = Grid::from_scene(scene, 12.0);
+
+        let mut field = CostField::new(grid);
+
+        // we just want to hard block pathfinding from going through block rects.
+        for rect in self.block_rects.values() {
+            field.add_block_rect(*rect, 0.0);
+        }
+
+        field
+    }
+
+    fn draw_edges(&mut self, ui: &mut egui::Ui, scene_rect: egui::Rect) {
+        let field = self.build_field(scene_rect);
+
+        let mut astar = AStar::new(&field);
+
+        let mut routed_polylines: Vec<Vec<egui::Pos2>> = Vec::new();
+
+        for pl in &self.port_lines {
+            let Some(&from) = self.port_positions.get(&pl.from) else {
+                continue;
+            };
+
+            let Some(&to) = self.port_positions.get(&pl.to) else {
+                continue;
+            };
+
+            if let Some(poly) = astar.find_path(from, to) {
+                // field.add_polyline_penalty(&poly, self.style.edge.width );
+                routed_polylines.push(poly);
+            }
+        }
+
+        for poly in &routed_polylines {
+            ui.painter()
+                .add(egui::Shape::line(poly.clone(), self.style.edge));
+        }
+    }
+
     pub fn show(&mut self, ui: &mut Ui, scene_rect: &mut Rect) {
         egui::Scene::new()
             .max_inner_size([
@@ -281,6 +332,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
                 }
 
                 self.assign_port_lines();
+                self.draw_edges(ui, ui.clip_rect());
             });
     }
 }

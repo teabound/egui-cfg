@@ -1,17 +1,14 @@
 use core::f32;
-use std::{
-    collections::{HashMap, HashSet},
-    future::pending,
-};
+use std::collections::{HashMap, HashSet};
 
 pub type GridCoord = (usize, usize);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Grid {
-    origin: egui::Pos2,
-    cols: usize,
-    rows: usize,
-    cell: f32,
+    pub origin: egui::Pos2,
+    pub cols: usize,
+    pub rows: usize,
+    pub cell: f32,
 }
 
 impl Grid {
@@ -29,6 +26,29 @@ impl Grid {
         }
     }
 
+    /// Gets all valid 4-direction neighbors of `coords` inside the grid.
+    fn cardinal_neighbors(&self, coords: GridCoord) -> Vec<GridCoord> {
+        let (x, y) = coords;
+        let mut neighbors = Vec::new();
+
+        if x + 1 < self.cols {
+            neighbors.push((x + 1, y));
+        }
+        if let Some(nx) = x.checked_sub(1) {
+            neighbors.push((nx, y));
+        }
+
+        if y + 1 < self.rows {
+            neighbors.push((x, y + 1));
+        }
+
+        if let Some(ny) = y.checked_sub(1) {
+            neighbors.push((x, ny));
+        }
+
+        neighbors
+    }
+
     /// Convert a position to a place in the grid.
     fn to_cell(&self, p: egui::Pos2) -> GridCoord {
         // turn into origin relative coordinates.
@@ -42,7 +62,7 @@ impl Grid {
     }
 
     /// Convert 2D `GridCoord`, into 1D index.
-    pub fn to_index(&self, coords: GridCoord) -> usize {
+    pub const fn to_index(&self, coords: GridCoord) -> usize {
         coords.1 * self.cols + coords.0
     }
 
@@ -53,10 +73,10 @@ impl Grid {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CostField {
-    cost: Vec<f32>,
-    grid: Grid,
+    pub cost: Vec<f32>,
+    pub grid: Grid,
 }
 
 impl CostField {
@@ -69,6 +89,10 @@ impl CostField {
 
     fn get_cost_cell_mut(&mut self, coords: GridCoord) -> &mut f32 {
         &mut self.cost[self.grid.to_index(coords)]
+    }
+
+    fn cost_at(&self, coords: GridCoord) -> Option<f32> {
+        self.cost.get(self.grid.to_index(coords)).copied()
     }
 
     pub fn add_block_rect(&mut self, block_rectangle: egui::Rect, margin: f32) {
@@ -148,7 +172,6 @@ pub struct CellBase {
     h: f32,
     parent: Option<GridCoord>,
     is_pending: bool,
-    visited: bool,
 }
 
 impl CellBase {
@@ -158,7 +181,6 @@ impl CellBase {
             h: 0.0,
             parent: None,
             is_pending: false,
-            visited: false,
         }
     }
 
@@ -175,7 +197,7 @@ pub struct AStar<'a> {
 }
 
 impl<'a> AStar<'a> {
-    fn new(field: &'a CostField) -> Self {
+    pub fn new(field: &'a CostField) -> Self {
         Self {
             field,
             cells: HashMap::new(),
@@ -185,7 +207,7 @@ impl<'a> AStar<'a> {
 
     /// Manhattan distance that we use for our A* H cost calculation.
     const fn manhattan(a: GridCoord, b: GridCoord) -> usize {
-        a.0 - b.0 + a.1 - b.1
+        a.0.abs_diff(b.0) + a.1.abs_diff(b.1)
     }
 
     fn pop_best(&mut self) -> GridCoord {
@@ -218,6 +240,12 @@ impl<'a> AStar<'a> {
         // get the ending cell.
         let end = self.field.grid.to_cell(end);
 
+        // reject if the goal is in a blocked region.
+        if self.field.cost_at(end)? == f32::MAX {
+            println!("invalid end position");
+            return None;
+        }
+
         self.cells = HashMap::new();
 
         // place the starting coordinate into the pending vector.
@@ -230,7 +258,6 @@ impl<'a> AStar<'a> {
             h: Self::manhattan(start, end) as _,
             parent: None,
             is_pending: true,
-            visited: false,
         };
 
         self.cells.insert(start, start_cell);
@@ -243,12 +270,60 @@ impl<'a> AStar<'a> {
 
             if let Some(current_cell) = self.cells.get_mut(&current_cell) {
                 current_cell.is_pending = false;
+            }
 
-                if current_cell.visited {
-                    unimplemented!()
+            if current_cell == end {
+                // this will create list of parents of successive cells.
+                let mut path = vec![current_cell];
+
+                let mut current = current_cell;
+
+                while let Some(prev) = self.cells.get(&current).and_then(|c| c.parent) {
+                    current = prev;
+                    path.push(current);
                 }
 
-                current_cell.visited = true;
+                // reverse the list so that it's children->parent.
+                path.reverse();
+
+                println!("test");
+                return Some(
+                    path.into_iter()
+                        .map(|p| self.field.grid.cell_center(p))
+                        .collect(),
+                );
+            }
+
+            for neighbor in self.field.grid.cardinal_neighbors(current_cell) {
+                let neighbor_cost = match self.field.cost_at(neighbor) {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                if neighbor_cost == f32::MAX {
+                    continue;
+                }
+
+                if !seen.contains(&neighbor) {
+                    self.cells.insert(neighbor, CellBase::new());
+                    seen.insert(neighbor);
+                }
+
+                // get the cost that it would take to go from our current cell to this neighbor.
+                let candidate_cost = self.cells[&current_cell].g + neighbor_cost;
+
+                if candidate_cost < self.cells[&neighbor].g {
+                    let neighbor_cell = self.cells.get_mut(&neighbor).unwrap();
+
+                    neighbor_cell.parent = Some(current_cell);
+                    neighbor_cell.g = candidate_cost;
+                    neighbor_cell.h = AStar::manhattan(neighbor, end) as _;
+
+                    if !neighbor_cell.is_pending {
+                        self.pending.push(neighbor);
+                        neighbor_cell.is_pending = true;
+                    }
+                }
             }
         }
 
