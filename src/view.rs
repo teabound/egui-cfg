@@ -29,91 +29,98 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
         }
     }
 
-    fn draw_block(&mut self, ui: &mut Ui, x: f32, y: f32, node: &NodeIndex) {
-        // get the target basic block from the graph.
-        let block = &self.layout.graph[*node];
+    // This will draw blocks in the egui ui panel, and also push the position on the
+    // block rectangle to a hashmap, so that we can use it later.
+    fn assign_and_draw_blocks(&mut self, ui: &mut Ui) {
+        for (node, coords) in &self.layout.coords {
+            let (x, y) = (coords.0 as f32, coords.1 as f32);
 
-        let style = self.style;
+            // get the target basic block from the graph.
+            let block = &self.layout.graph[*node];
 
-        // where the block that we're going to draw starts.
-        let block_position = ui.min_rect().min + Vec2::new(x, y);
+            let style = self.style;
 
-        // get the width of the content (the size of the node without the padding).
-        let content_width = style.size.x - style.padding.x * 2.0;
+            // where the block that we're going to draw starts.
+            let block_position = ui.min_rect().min + Vec2::new(x, y);
 
-        let body_text = block.body_lines().join("\n");
+            // get the width of the content (the size of the node without the padding).
+            let content_width = style.size.x - style.padding.x * 2.0;
 
-        // get the text galley so we can get information related to it.
-        let body_galley = ui.fonts(|f| {
-            f.layout(
-                body_text,
-                style.text_font.clone(),
+            let body_text = block.body_lines().join("\n");
+
+            // get the text galley so we can get information related to it.
+            let body_galley = ui.fonts(|f| {
+                f.layout(
+                    body_text,
+                    style.text_font.clone(),
+                    Color32::WHITE,
+                    content_width,
+                )
+            });
+
+            // ge the total size of the height including the padding, the text and the header.
+            let block_height = style.header_height + style.padding.y * 2.0 + body_galley.size().y;
+
+            // create a rectangle starting from the start of our block and is the size we've calculated
+            // from the content in the block.
+            let block_rectangle =
+                Rect::from_min_size(block_position, vec2(style.size.x, block_height));
+
+            self.block_rects.insert(*node, block_rectangle);
+
+            let corner_rounding = CornerRadius::same(style.rounding);
+
+            // draw the entire node block.
+            ui.painter().rect(
+                block_rectangle,
+                corner_rounding,
+                style.fill,
+                style.stroke,
+                StrokeKind::Inside,
+            );
+
+            // the header rectangle, width is the size of the block, then we just add the header height.
+            let header_rectangle = Rect::from_min_max(
+                block_rectangle.min,
+                pos2(
+                    block_rectangle.max.x,
+                    block_rectangle.min.y + style.header_height,
+                ),
+            );
+
+            ui.painter().rect(
+                header_rectangle,
+                CornerRadius {
+                    nw: style.rounding,
+                    ne: style.rounding,
+                    se: 0,
+                    sw: 0,
+                },
+                style.header_fill,
+                Stroke::NONE,
+                StrokeKind::Inside,
+            );
+
+            // block title, could be empty or not.
+            let label = format!("{}", block.title());
+            // NOTE: have an option to put the title in the middle of the header rectangle.
+            let label_pos = header_rectangle.left_center() + vec2(style.padding.x, 0.0);
+
+            ui.painter().text(
+                label_pos,
+                Align2::LEFT_CENTER,
+                label,
+                style.label_font.clone(),
                 Color32::WHITE,
-                content_width,
-            )
-        });
+            );
 
-        // ge the total size of the height including the padding, the text and the header.
-        let block_height = style.header_height + style.padding.y * 2.0 + body_galley.size().y;
+            let text_pos = pos2(
+                block_rectangle.min.x + style.padding.x,
+                header_rectangle.max.y + style.padding.y,
+            );
 
-        // create a rectangle starting from the start of our block and is the size we've calculated
-        // from the content in the block.
-        let block_rectangle = Rect::from_min_size(block_position, vec2(style.size.x, block_height));
-
-        self.block_rects.insert(*node, block_rectangle);
-
-        let corner_rounding = CornerRadius::same(style.rounding);
-
-        // draw the entire node block.
-        ui.painter().rect(
-            block_rectangle,
-            corner_rounding,
-            style.fill,
-            style.stroke,
-            StrokeKind::Inside,
-        );
-
-        // the header rectangle, width is the size of the block, then we just add the header height.
-        let header_rectangle = Rect::from_min_max(
-            block_rectangle.min,
-            pos2(
-                block_rectangle.max.x,
-                block_rectangle.min.y + style.header_height,
-            ),
-        );
-
-        ui.painter().rect(
-            header_rectangle,
-            CornerRadius {
-                nw: style.rounding,
-                ne: style.rounding,
-                se: 0,
-                sw: 0,
-            },
-            style.header_fill,
-            Stroke::NONE,
-            StrokeKind::Inside,
-        );
-
-        // block title, could be empty or not.
-        let label = format!("{}", block.title());
-        // NOTE: have an option to put the title in the middle of the header rectangle.
-        let label_pos = header_rectangle.left_center() + vec2(style.padding.x, 0.0);
-
-        ui.painter().text(
-            label_pos,
-            Align2::LEFT_CENTER,
-            label,
-            style.label_font.clone(),
-            Color32::WHITE,
-        );
-
-        let text_pos = pos2(
-            block_rectangle.min.x + style.padding.x,
-            header_rectangle.max.y + style.padding.y,
-        );
-
-        ui.painter().galley(text_pos, body_galley, Color32::WHITE);
+            ui.painter().galley(text_pos, body_galley, Color32::WHITE);
+        }
     }
 
     /// This will get the position at the point of a rect, either the top
@@ -319,16 +326,10 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
             ])
             .zoom_range(0.1..=2.0)
             .show(ui, scene_rect, |ui| {
-                // this will draw the block in the egui ui panel, and also push the position on the
-                // block rectangle to a hashmap, so that we can use it later.
-                for (node, (x, y)) in &self.layout.coords {
-                    self.draw_block(ui, *x as f32, *y as f32, node);
-                }
-
+                self.assign_and_draw_blocks(ui);
                 self.assign_port_positions();
                 self.assign_port_lines();
                 self.draw_edges(ui, ui.clip_rect());
-
                 self.draw_ports(ui);
             });
     }
