@@ -71,6 +71,14 @@ impl Grid {
         let (x, y) = coords;
         self.origin + egui::vec2((x as f32 + 0.5) * self.cell, (y as f32 + 0.5) * self.cell)
     }
+
+    /// Returns which direction we go to, from `a`, to `b`.
+    pub const fn get_direction(a: GridCoord, b: GridCoord) -> (i8, i8) {
+        (
+            (b.0 as isize - a.0 as isize).signum() as i8,
+            (b.1 as isize - a.1 as isize).signum() as i8,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -286,7 +294,6 @@ impl<'a> AStar<'a> {
                 // reverse the list so that it's children->parent.
                 path.reverse();
 
-                println!("test");
                 return Some(
                     path.into_iter()
                         .map(|p| self.field.grid.cell_center(p))
@@ -309,8 +316,24 @@ impl<'a> AStar<'a> {
                     seen.insert(neighbor);
                 }
 
+                let incoming_dir = self
+                    .cells
+                    .get(&current_cell)
+                    .and_then(|c| c.parent)
+                    .map(|p| Grid::get_direction(p, current_cell));
+
+                // get the direction from our current cell to the neighbor cell, to compare.
+                let step_dir = Grid::get_direction(current_cell, neighbor);
+
+                // if the direction is different from parent to child than child to neighbor, add penalty.
+                let turn_pen = if Some(step_dir) != incoming_dir {
+                    1.0
+                } else {
+                    0.0
+                };
+
                 // get the cost that it would take to go from our current cell to this neighbor.
-                let candidate_cost = self.cells[&current_cell].g + neighbor_cost;
+                let candidate_cost = self.cells[&current_cell].g + neighbor_cost + turn_pen;
 
                 if candidate_cost < self.cells[&neighbor].g {
                     let neighbor_cell = self.cells.get_mut(&neighbor).unwrap();

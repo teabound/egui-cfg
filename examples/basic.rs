@@ -74,6 +74,7 @@ fn build_dummy_cfg() -> StableGraph<BasicBlock, EdgeKind> {
     g.add_edge(cond, else_, EdgeKind::FallThrough);
     g.add_edge(then_, exit, EdgeKind::Unconditional);
     g.add_edge(else_, exit, EdgeKind::Unconditional);
+    g.add_edge(exit, entry, EdgeKind::Unconditional);
     g
 }
 

@@ -264,7 +264,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
     }
 
     fn build_field(&self, scene: egui::Rect) -> CostField {
-        let grid = Grid::from_scene(scene, 12.0);
+        let grid = Grid::from_scene(scene, 7.0);
 
         let mut field = CostField::new(grid);
 
