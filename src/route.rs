@@ -151,7 +151,7 @@ impl CostField {
 
     /// Adds a penalty (scaled by distance) to the cost grid where polylines are placed to encourage the algorithm to
     /// not cross edges and to avoid putting the edges right next to each if possible.
-    fn add_polyline_penalty(&mut self, positions: &[egui::Pos2], width: f32) {
+    pub fn add_polyline_penalty(&mut self, positions: &[egui::Pos2], width: f32) {
         // return nothing if there's not a single line segment.
         if positions.len() < 2 {
             return;
@@ -205,18 +205,12 @@ impl CellBase {
 
 pub struct AStar<'a> {
     field: &'a CostField,
-    /// We map grid coordinates to cell information.
-    cells: HashMap<GridCoord, CellBase>,
-    pending: Vec<GridCoord>,
+    // /// We map grid coordinates to cell information.
 }
 
 impl<'a> AStar<'a> {
     pub fn new(field: &'a CostField) -> Self {
-        Self {
-            field,
-            cells: HashMap::new(),
-            pending: Vec::new(),
-        }
+        Self { field }
     }
 
     /// Manhattan distance that we use for our A* H cost calculation.
@@ -224,17 +218,17 @@ impl<'a> AStar<'a> {
         a.0.abs_diff(b.0) + a.1.abs_diff(b.1)
     }
 
-    fn pop_best(&mut self) -> GridCoord {
+    fn pop_best(
+        &mut self,
+        pending: &mut Vec<GridCoord>,
+        cells: &HashMap<GridCoord, CellBase>,
+    ) -> GridCoord {
         let mut best_i = 0usize;
         let mut best_f = f32::INFINITY;
 
         // scan every cell currently waiting to be explored.
-        for (i, coords) in self.pending.iter().enumerate() {
-            let f = self
-                .cells
-                .get(coords)
-                .map(|c| c.f())
-                .unwrap_or(f32::INFINITY);
+        for (i, coords) in pending.iter().enumerate() {
+            let f = cells.get(coords).map(|c| c.f()).unwrap_or(f32::INFINITY);
 
             // set the minimum f value as best, and its index.
             if f < best_f {
@@ -244,7 +238,7 @@ impl<'a> AStar<'a> {
         }
 
         // remove that best one from the pending list and return it
-        self.pending.swap_remove(best_i)
+        pending.swap_remove(best_i)
     }
 
     pub fn find_path(&mut self, start: egui::Pos2, end: egui::Pos2) -> Option<Vec<egui::Pos2>> {
@@ -260,10 +254,10 @@ impl<'a> AStar<'a> {
             return None;
         }
 
-        self.cells = HashMap::new();
+        let mut cells: HashMap<GridCoord, CellBase> = HashMap::new();
 
         // place the starting coordinate into the pending vector.
-        self.pending = vec![start];
+        let mut pending: Vec<GridCoord> = vec![start];
 
         let mut seen: HashSet<GridCoord> = HashSet::new();
 
@@ -274,15 +268,15 @@ impl<'a> AStar<'a> {
             is_pending: true,
         };
 
-        self.cells.insert(start, start_cell);
+        cells.insert(start, start_cell);
 
         seen.insert(start);
 
-        while !self.pending.is_empty() {
+        while !pending.is_empty() {
             // get the currently best cell.
-            let current_cell = self.pop_best();
+            let current_cell = self.pop_best(&mut pending, &cells);
 
-            if let Some(current_cell) = self.cells.get_mut(&current_cell) {
+            if let Some(current_cell) = cells.get_mut(&current_cell) {
                 current_cell.is_pending = false;
             }
 
@@ -292,7 +286,7 @@ impl<'a> AStar<'a> {
 
                 let mut current = current_cell;
 
-                while let Some(prev) = self.cells.get(&current).and_then(|c| c.parent) {
+                while let Some(prev) = cells.get(&current).and_then(|c| c.parent) {
                     current = prev;
                     path.push(current);
                 }
@@ -318,12 +312,11 @@ impl<'a> AStar<'a> {
                 }
 
                 if !seen.contains(&neighbor) {
-                    self.cells.insert(neighbor, CellBase::new());
+                    cells.insert(neighbor, CellBase::new());
                     seen.insert(neighbor);
                 }
 
-                let incoming_dir = self
-                    .cells
+                let incoming_dir = cells
                     .get(&current_cell)
                     .and_then(|c| c.parent)
                     .map(|p| Grid::get_direction(p, current_cell));
@@ -339,17 +332,17 @@ impl<'a> AStar<'a> {
                 };
 
                 // get the cost that it would take to go from our current cell to this neighbor.
-                let candidate_cost = self.cells[&current_cell].g + neighbor_cost + turn_pen;
+                let candidate_cost = cells[&current_cell].g + neighbor_cost + turn_pen;
 
-                if candidate_cost < self.cells[&neighbor].g {
-                    let neighbor_cell = self.cells.get_mut(&neighbor).unwrap();
+                if candidate_cost < cells[&neighbor].g {
+                    let neighbor_cell = cells.get_mut(&neighbor).unwrap();
 
                     neighbor_cell.parent = Some(current_cell);
                     neighbor_cell.g = candidate_cost;
                     neighbor_cell.h = AStar::manhattan(neighbor, end) as _;
 
                     if !neighbor_cell.is_pending {
-                        self.pending.push(neighbor);
+                        pending.push(neighbor);
                         neighbor_cell.is_pending = true;
                     }
                 }

@@ -1,6 +1,6 @@
 use egui::{self, Color32, FontId, Stroke, TextStyle, Vec2, vec2};
 
-use crate::types::BlockLike;
+use crate::BlockLike;
 
 /// This is the style of the Basic Block graph node.
 ///

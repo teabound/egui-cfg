@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::CfgLayout;
 use crate::route::{AStar, CostField, Grid};
 use crate::style::NodeStyle;
-use crate::types::{BlockLike, EdgeKind, PortKind, PortLine, PortSlot};
+use crate::{BlockLike, EdgeKind, PortKind, PortLine, PortSlot};
 use egui::{
     Align2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
@@ -132,48 +132,55 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
             .collect()
     }
 
-    fn draw_ports_for_node(
-        &mut self,
-        ui: &mut egui::Ui,
-        node: NodeIndex,
-        rect: Rect,
-        inputs: usize,
-        outputs: usize,
-    ) {
-        let mut draw_port = |pid: PortSlot, mut pos: Pos2| {
-            let y = 4.0;
+    fn assign_port_positions(&mut self) {
+        const OFFSET: f32 = 4.0;
 
-            // we offset so the ports don't overlap with the basic block rectangles.
-            pos.y += if matches!(pid.kind, PortKind::Input) {
-                -y
-            } else {
-                y
-            };
+        for node in self.layout.graph.node_indices() {
+            let graph = self.layout.graph.clone();
 
+            // get the indegree of hte current node.
+            let inputs = graph.neighbors_directed(node, petgraph::Incoming).count();
+            // get the outdegree of the current node.
+            let outputs = graph.neighbors_directed(node, petgraph::Outgoing).count();
+
+            if let Some(&rect) = self.block_rects.get(&node) {
+                for (i, mut pos) in Self::layout_ports_on_rect(rect, PortKind::Input, inputs)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let port = PortSlot::new(node, i, PortKind::Input);
+                    // we offset so the ports don't overlap with the basic block rectangles.
+                    pos.y += -OFFSET;
+                    self.port_positions.insert(port, pos);
+                }
+
+                for (i, mut pos) in Self::layout_ports_on_rect(rect, PortKind::Output, outputs)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let port = PortSlot::new(node, i, PortKind::Output);
+                    // we offset so the ports don't overlap with the basic block rectangles.
+                    pos.y += OFFSET;
+                    self.port_positions.insert(port, pos);
+                }
+            }
+        }
+    }
+
+    fn draw_ports(&mut self, ui: &mut egui::Ui) {
+        for &port_pos in self.port_positions.values() {
             let radius = self.style.edge.width * 3.0;
 
             // draw the first cricle, just the edge outline.
-            ui.painter().circle_stroke(pos, radius, self.style.edge);
+            ui.painter()
+                .circle_stroke(port_pos, radius, self.style.edge);
 
             // draw the second circle which is the filled "inside".
-            ui.painter()
-                .circle_filled(pos, radius - self.style.edge.width * 0.75, self.style.fill);
-
-            self.port_positions.insert(pid, pos);
-        };
-
-        for (i, pos) in Self::layout_ports_on_rect(rect, PortKind::Input, inputs)
-            .into_iter()
-            .enumerate()
-        {
-            draw_port(PortSlot::new(node, i, PortKind::Input), pos);
-        }
-
-        for (i, pos) in Self::layout_ports_on_rect(rect, PortKind::Output, outputs)
-            .into_iter()
-            .enumerate()
-        {
-            draw_port(PortSlot::new(node, i, PortKind::Output), pos);
+            ui.painter().circle_filled(
+                port_pos,
+                radius - self.style.edge.width * 0.75,
+                self.style.fill,
+            );
         }
     }
 
@@ -264,7 +271,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
     }
 
     fn build_field(&self, scene: egui::Rect) -> CostField {
-        let grid = Grid::from_scene(scene, 7.0);
+        let grid = Grid::from_scene(scene, 3.0);
 
         let mut field = CostField::new(grid);
 
@@ -318,21 +325,11 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
                     self.draw_block(ui, *x as f32, *y as f32, node);
                 }
 
-                for node in self.layout.graph.node_indices() {
-                    let graph = self.layout.graph.clone();
-
-                    // get the indegree of hte current node.
-                    let inputs = graph.neighbors_directed(node, petgraph::Incoming).count();
-                    // get the outdegree of the current node.
-                    let outputs = graph.neighbors_directed(node, petgraph::Outgoing).count();
-
-                    if let Some(&rect) = self.block_rects.get(&node) {
-                        self.draw_ports_for_node(ui, node, rect, inputs, outputs);
-                    }
-                }
-
+                self.assign_port_positions();
                 self.assign_port_lines();
                 self.draw_edges(ui, ui.clip_rect());
+
+                self.draw_ports(ui);
             });
     }
 }
