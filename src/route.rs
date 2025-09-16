@@ -18,8 +18,11 @@ impl Grid {
         let cols = (scene.width() / cell).floor() as usize;
         let rows = (scene.height() / cell).floor() as usize;
 
+        let ox = (scene.min.x / cell).floor() * cell;
+        let oy = (scene.min.y / cell).floor() * cell;
+
         Self {
-            origin: scene.min,
+            origin: egui::pos2(ox, oy),
             cols,
             rows,
             cell,
@@ -55,10 +58,13 @@ impl Grid {
         let rel = p - self.origin;
 
         // get the nearest cell.
-        let x = (rel.x / self.cell).round() as usize;
-        let y = (rel.y / self.cell).round() as usize;
+        let mut x = (rel.x / self.cell).floor() as isize;
+        let mut y = (rel.y / self.cell).floor() as isize;
 
-        (x, y)
+        x = x.clamp(0, self.cols as isize - 1);
+        y = y.clamp(0, self.rows as isize - 1);
+
+        (x as usize, y as usize)
     }
 
     /// Convert 2D `GridCoord`, into 1D index.
