@@ -3,6 +3,7 @@ pub mod style;
 pub mod view;
 
 use crate::style::{NodeStyle, approx_block_height};
+use egui::Rect;
 use petgraph::{graph::NodeIndex, stable_graph::StableGraph};
 
 pub trait BlockLike {
@@ -42,7 +43,7 @@ impl PortSlot {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct PortLine {
     pub from: PortSlot,
     pub to: PortSlot,

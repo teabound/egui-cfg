@@ -16,6 +16,7 @@ pub struct CfgView<'a, N: BlockLike + Clone, E: Clone> {
     block_rects: HashMap<NodeIndex, Rect>,
     port_positions: HashMap<PortSlot, Pos2>,
     port_lines: Vec<PortLine>,
+    cached_lines: Option<Vec<Vec<egui::Pos2>>>,
 }
 
 impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
@@ -26,7 +27,20 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
             block_rects: HashMap::new(),
             port_lines: Vec::new(),
             port_positions: HashMap::new(),
+            cached_lines: None,
         }
+    }
+
+    /// Get a rectangle the encompasses every block node placed.
+    fn get_world_rect(&self, expand: Option<f32>) -> Rect {
+        let mut bounds = egui::Rect::NOTHING;
+
+        // unionize all of the rects we created.
+        for rects in self.block_rects.values() {
+            bounds = bounds.union(*rects);
+        }
+
+        bounds.expand(expand.unwrap_or(100.0))
     }
 
     // This will draw blocks in the egui ui panel, and also push the position on the
@@ -41,7 +55,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
             let style = self.style;
 
             // where the block that we're going to draw starts.
-            let block_position = ui.min_rect().min + Vec2::new(x, y);
+            let block_position = Pos2::new(x, y);
 
             // get the width of the content (the size of the node without the padding).
             let content_width = style.size.x - style.padding.x * 2.0;
@@ -143,7 +157,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
         const OFFSET: f32 = 4.0;
 
         for node in self.layout.graph.node_indices() {
-            let graph = self.layout.graph.clone();
+            let graph = &self.layout.graph;
 
             // get the indegree of hte current node.
             let inputs = graph.neighbors_directed(node, petgraph::Incoming).count();
@@ -284,18 +298,27 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
 
         // we just want to hard block pathfinding from going through block rects.
         for rect in self.block_rects.values() {
-            field.add_block_rect(*rect, 0.0);
+            field.add_block_rect(*rect, 5.0);
         }
 
         field
     }
 
     fn draw_edges(&mut self, ui: &mut egui::Ui, scene_rect: egui::Rect) {
-        let field = self.build_field(scene_rect);
-
-        let mut astar = AStar::new(&field);
-
+        let mut field = self.build_field(scene_rect);
+        let id = ui.make_persistent_id("cfg_edge_cache_v1");
         let mut routed_polylines: Vec<Vec<egui::Pos2>> = Vec::new();
+
+        if let Some(lines) = ui
+            .ctx()
+            .data_mut(|d| d.get_persisted::<Vec<Vec<egui::Pos2>>>(id))
+        {
+            for poly in lines {
+                ui.painter()
+                    .add(egui::Shape::line(poly.clone(), self.style.edge));
+            }
+            return;
+        }
 
         for pl in &self.port_lines {
             let Some(&from) = self.port_positions.get(&pl.from) else {
@@ -306,16 +329,21 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
                 continue;
             };
 
+            let mut astar = AStar::new(&field);
+
             if let Some(poly) = astar.find_path(from, to) {
-                // field.add_polyline_penalty(&poly, self.style.edge.width );
+                // field.add_polyline_penalty(&poly, self.style.edge.width);
                 routed_polylines.push(poly);
             }
         }
 
-        for poly in &routed_polylines {
+        for poly in routed_polylines.iter() {
             ui.painter()
                 .add(egui::Shape::line(poly.clone(), self.style.edge));
         }
+
+        ui.ctx()
+            .data_mut(|d| d.insert_persisted(id, routed_polylines));
     }
 
     pub fn show(&mut self, ui: &mut Ui, scene_rect: &mut Rect) {
@@ -329,7 +357,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
                 self.assign_and_draw_blocks(ui);
                 self.assign_port_positions();
                 self.assign_port_lines();
-                self.draw_edges(ui, ui.clip_rect());
+                self.draw_edges(ui, self.get_world_rect(None));
                 self.draw_ports(ui);
             });
     }

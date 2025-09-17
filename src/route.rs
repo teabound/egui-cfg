@@ -109,9 +109,12 @@ impl CostField {
         self.cost.get(self.grid.to_index(coords)).copied()
     }
 
-    pub fn add_block_rect(&mut self, block_rectangle: egui::Rect, margin: f32) {
+    /// Add a rectangle to the cost field, with a cost radius.
+    ///
+    /// The cost radius isn't a hard block but discourages lines from going through it.
+    pub fn add_block_rect(&mut self, block_rectangle: egui::Rect, radius: f32) {
         // we expand the rectangle by the margin so that we increase the "hitbox".
-        let block_rectangle = block_rectangle.expand(margin);
+        // let block_rectangle = block_rectangle.expand(margin);
 
         for y in 0..self.grid.rows {
             for x in 0..self.grid.cols {
@@ -129,7 +132,7 @@ impl CostField {
                 let d = block_rectangle.distance_to_pos(cell);
 
                 // get the 3 cell distance percentage between current cell and the block.
-                let falloff = (self.grid.cell * 3.0 - d).max(0.0) / (self.grid.cell * 3.0);
+                let falloff = (self.grid.cell * radius - d).max(0.0) / (self.grid.cell * radius);
 
                 *self.get_cost_cell_mut(coords) += 3.0 * falloff;
             }
