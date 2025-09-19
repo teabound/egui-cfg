@@ -141,49 +141,6 @@ impl CostField {
             }
         }
     }
-
-    fn distance_point_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
-        // get the vector from a toward p.
-        let ap = p - a;
-        // get the vector from a toward b.
-        let ab = b - a;
-
-        // fraction of the way from A to B where P projects onto AB.
-        let t = (ap.dot(ab) / ab.dot(ab)).clamp(0.0, 1.0);
-
-        // get the vector length from q toward p.
-        (a + ab * t - p).length()
-    }
-
-    /// Adds a penalty (scaled by distance) to the cost grid where polylines are placed to encourage the algorithm to
-    /// not cross edges and to avoid putting the edges right next to each if possible.
-    pub fn add_polyline_penalty(&mut self, positions: &[egui::Pos2], width: f32) {
-        // return nothing if there's not a single line segment.
-        if positions.len() < 2 {
-            return;
-        }
-
-        for segment in positions.windows(2) {
-            let a = segment[0];
-            let b = segment[1];
-
-            for y in 0..self.grid.rows {
-                for x in 0..self.grid.cols {
-                    let coords: GridCoord = (x, y);
-
-                    // get the position of the center of the current coord.
-                    let p = self.grid.cell_center(coords);
-
-                    let d = Self::distance_point_to_segment(p, a, b);
-
-                    if d <= width {
-                        let t = (width - d) / width;
-                        *self.get_cost_cell_mut(coords) += 5.0 * t;
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -247,7 +204,7 @@ impl<'a> AStar<'a> {
 
         // we create a bounding box that keeps our focus within range of the start and end positions.
         let bounding_box =
-            egui::Rect::from_two_pos(begin, finish).expand(50.0 * self.field.grid.cell);
+            egui::Rect::from_two_pos(begin, finish).expand(100.0 * self.field.grid.cell);
 
         // we use a min heap to keep track of the most ideal pending coordinates.
         let mut pending: BinaryHeap<(Reverse<u32>, GridCoord)> = BinaryHeap::new();
