@@ -1,5 +1,8 @@
 use core::f32;
-use std::collections::{HashMap, HashSet};
+use std::{
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap, HashSet},
+};
 
 pub type GridCoord = (usize, usize);
 
@@ -188,7 +191,6 @@ pub struct CellBase {
     g: f32,
     h: f32,
     parent: Option<GridCoord>,
-    is_pending: bool,
 }
 
 impl CellBase {
@@ -197,7 +199,6 @@ impl CellBase {
             g: f32::INFINITY,
             h: 0.0,
             parent: None,
-            is_pending: false,
         }
     }
 
@@ -221,35 +222,22 @@ impl<'a> AStar<'a> {
         a.0.abs_diff(b.0) + a.1.abs_diff(b.1)
     }
 
-    fn pop_best(
-        &mut self,
-        pending: &mut Vec<GridCoord>,
-        cells: &HashMap<GridCoord, CellBase>,
-    ) -> GridCoord {
-        let mut best_i = 0usize;
-        let mut best_f = f32::INFINITY;
-
-        // scan every cell currently waiting to be explored.
-        for (i, coords) in pending.iter().enumerate() {
-            let f = cells.get(coords).map(|c| c.f()).unwrap_or(f32::INFINITY);
-
-            // set the minimum f value as best, and its index.
-            if f < best_f {
-                best_f = f;
-                best_i = i;
-            }
+    /// Used specifically so that we can have Ord on "floats".
+    const fn float_key(f: f32) -> u32 {
+        let bits = f.to_bits();
+        if bits & 0x8000_0000 == 0 {
+            bits | 0x8000_0000
+        } else {
+            !bits
         }
-
-        // remove that best one from the pending list and return it
-        pending.swap_remove(best_i)
     }
 
-    pub fn find_path(&mut self, start: egui::Pos2, end: egui::Pos2) -> Option<Vec<egui::Pos2>> {
+    pub fn find_path(&mut self, begin: egui::Pos2, finish: egui::Pos2) -> Option<Vec<egui::Pos2>> {
         // get the starting cell.
-        let start = self.field.grid.to_cell(start);
+        let start = self.field.grid.to_cell(begin);
 
         // get the ending cell.
-        let end = self.field.grid.to_cell(end);
+        let end = self.field.grid.to_cell(finish);
 
         // reject if the goal is in a blocked region.
         if self.field.cost_at(end)? == f32::MAX {
@@ -257,37 +245,38 @@ impl<'a> AStar<'a> {
             return None;
         }
 
-        let mut cells: HashMap<GridCoord, CellBase> = HashMap::new();
+        // we create a bounding box that keeps our focus within range of the start and end positions.
+        let bounding_box =
+            egui::Rect::from_two_pos(begin, finish).expand(50.0 * self.field.grid.cell);
 
-        // place the starting coordinate into the pending vector.
-        let mut pending: Vec<GridCoord> = vec![start];
+        // we use a min heap to keep track of the most ideal pending coordinates.
+        let mut pending: BinaryHeap<(Reverse<u32>, GridCoord)> = BinaryHeap::new();
 
+        // keep track of all the coordinates we've seen/processed.
         let mut seen: HashSet<GridCoord> = HashSet::new();
 
-        let start_cell = CellBase {
-            g: 0.0,
-            h: Self::manhattan(start, end) as _,
-            parent: None,
-            is_pending: true,
-        };
+        let mut cells: HashMap<GridCoord, CellBase> = HashMap::new();
 
-        cells.insert(start, start_cell);
+        cells.insert(
+            start,
+            CellBase {
+                g: 0.0,
+                h: Self::manhattan(start, end) as _,
+                parent: None,
+            },
+        );
 
-        seen.insert(start);
+        // place the starting coordinate into the pending min heap along with its f cost.
+        pending.push((Reverse(Self::float_key(cells[&start].f())), start));
 
-        while !pending.is_empty() {
-            // get the currently best cell.
-            let current_cell = self.pop_best(&mut pending, &cells);
-
-            if let Some(current_cell) = cells.get_mut(&current_cell) {
-                current_cell.is_pending = false;
+        while let Some((_, mut current)) = pending.pop() {
+            if !seen.insert(current) {
+                continue;
             }
 
-            if current_cell == end {
+            if current == end {
                 // this will create list of parents of successive cells.
-                let mut path = vec![current_cell];
-
-                let mut current = current_cell;
+                let mut path = vec![current];
 
                 while let Some(prev) = cells.get(&current).and_then(|c| c.parent) {
                     current = prev;
@@ -304,28 +293,25 @@ impl<'a> AStar<'a> {
                 );
             }
 
-            for neighbor in self.field.grid.cardinal_neighbors(current_cell) {
-                let neighbor_cost = match self.field.cost_at(neighbor) {
-                    Some(c) => c,
-                    None => continue,
-                };
-
-                if neighbor_cost == f32::MAX {
+            for neighbor in self.field.grid.cardinal_neighbors(current) {
+                // if our neighbor doesn't exist within our assumed range then continue.
+                if !bounding_box.contains(self.field.grid.cell_center(neighbor)) {
                     continue;
                 }
 
-                if !seen.contains(&neighbor) {
-                    cells.insert(neighbor, CellBase::new());
-                    seen.insert(neighbor);
-                }
+                // take any cost as long as the cost isn't the max, aka a wall.
+                let neighbor_cost = match self.field.cost_at(neighbor) {
+                    Some(c) if c != f32::MAX => c,
+                    _ => continue,
+                };
 
                 let incoming_dir = cells
-                    .get(&current_cell)
+                    .get(&current)
                     .and_then(|c| c.parent)
-                    .map(|p| Grid::get_direction(p, current_cell));
+                    .map(|p| Grid::get_direction(p, current));
 
                 // get the direction from our current cell to the neighbor cell, to compare.
-                let step_dir = Grid::get_direction(current_cell, neighbor);
+                let step_dir = Grid::get_direction(current, neighbor);
 
                 // if the direction is different from parent to child than child to neighbor, add penalty.
                 let turn_pen = if Some(step_dir) != incoming_dir {
@@ -335,19 +321,18 @@ impl<'a> AStar<'a> {
                 };
 
                 // get the cost that it would take to go from our current cell to this neighbor.
-                let candidate_cost = cells[&current_cell].g + neighbor_cost + turn_pen;
+                let candidate_cost = cells[&current].g + neighbor_cost + turn_pen;
 
-                if candidate_cost < cells[&neighbor].g {
-                    let neighbor_cell = cells.get_mut(&neighbor).unwrap();
+                let neighbor_cell = cells.entry(neighbor).or_insert_with(CellBase::new);
 
-                    neighbor_cell.parent = Some(current_cell);
+                if candidate_cost < neighbor_cell.g {
                     neighbor_cell.g = candidate_cost;
-                    neighbor_cell.h = AStar::manhattan(neighbor, end) as _;
+                    neighbor_cell.h = Self::manhattan(neighbor, end) as _;
+                    neighbor_cell.parent = Some(current);
 
-                    if !neighbor_cell.is_pending {
-                        pending.push(neighbor);
-                        neighbor_cell.is_pending = true;
-                    }
+                    let f = neighbor_cell.f();
+
+                    pending.push((Reverse(Self::float_key(f)), neighbor));
                 }
             }
         }
