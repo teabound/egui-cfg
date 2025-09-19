@@ -4,7 +4,11 @@ pub mod view;
 
 use crate::style::{NodeStyle, approx_block_height};
 use egui::Rect;
-use petgraph::{graph::NodeIndex, stable_graph::StableGraph};
+use petgraph::{
+    graph::NodeIndex,
+    stable_graph::StableGraph,
+    visit::{EdgeRef, IntoEdgeReferences},
+};
 
 pub trait BlockLike {
     fn title(&self) -> &str;
@@ -92,10 +96,33 @@ pub fn layout_graph<N: BlockLike + Clone, E: Clone>(
         (w, h)
     };
 
-    let info = rust_sugiyama::from_graph(graph, &vertex_size, &config.into());
+    let mut graph = graph.clone();
+
+    // get all nodes that have an outgoing edge that connects to the same node.
+    let loops: Vec<(petgraph::graph::NodeIndex, E)> = graph
+        .edge_references()
+        .filter(|e| e.source() == e.target())
+        .map(|e| (e.source(), e.weight().clone()))
+        .collect();
+
+    // remove all the edges that point to the same node.
+    for edge in graph.edge_indices().collect::<Vec<_>>() {
+        if let Some((u, v)) = graph.edge_endpoints(edge) {
+            if u == v {
+                graph.remove_edge(edge);
+            }
+        }
+    }
+
+    let info = rust_sugiyama::from_graph(&graph, &vertex_size, &config.into());
 
     // NOTE: maybe there will be a case when we need to get the full vector.
     let (coords, width, height) = info[0].clone();
+
+    // add the loop back after we've placed nodes.
+    for (n, w) in loops {
+        graph.add_edge(n, n, w);
+    }
 
     CfgLayout {
         coords,
