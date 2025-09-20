@@ -10,6 +10,9 @@ use egui::{
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 
+/// The offset from the port to the basic block rectangle.
+const PORT_OFFSET: f32 = 4.0;
+
 pub struct CfgView<'a, N: BlockLike + Clone, E: Clone> {
     pub layout: &'a CfgLayout<N, E>,
     pub style: &'a NodeStyle,
@@ -154,8 +157,6 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
     }
 
     fn assign_port_positions(&mut self) {
-        const OFFSET: f32 = 4.0;
-
         for node in self.layout.graph.node_indices() {
             let graph = &self.layout.graph;
 
@@ -171,7 +172,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
                 {
                     let port = PortSlot::new(node, i, PortKind::Input);
                     // we offset so the ports don't overlap with the basic block rectangles.
-                    pos.y += -OFFSET;
+                    pos.y += -PORT_OFFSET;
                     self.port_positions.insert(port, pos);
                 }
 
@@ -181,27 +182,55 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
                 {
                     let port = PortSlot::new(node, i, PortKind::Output);
                     // we offset so the ports don't overlap with the basic block rectangles.
-                    pos.y += OFFSET;
+                    pos.y += PORT_OFFSET;
                     self.port_positions.insert(port, pos);
                 }
             }
         }
     }
 
+    fn draw_arrow_tip(&self, ui: &mut egui::Ui, tip: egui::Pos2, dir: Option<egui::Vec2>) {
+        let size = self.style.edge.width * 4.0;
+
+        // get the unit direction of the arrow
+        let dir = dir.unwrap_or(egui::vec2(0.0, 1.0)).normalized();
+
+        // get the base of the triangle.
+        let base = tip - dir * size;
+
+        // set the vector perpendicular to tip->base, half the size of the base.
+        let perp = egui::vec2(-dir.y, dir.x) * (size * 0.5);
+
+        let p1 = base + perp;
+        let p2 = base - perp;
+
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![tip, p1, p2],
+            self.style.edge.color,
+            self.style.edge,
+        ));
+    }
+
     fn draw_ports(&mut self, ui: &mut egui::Ui) {
-        for &port_pos in self.port_positions.values() {
-            let radius = self.style.edge.width * 3.0;
+        for (slot, mut pos) in self.port_positions.clone() {
+            match slot.kind {
+                crate::PortKind::Output => {
+                    // draw the port closer to the block.
+                    pos.y -= PORT_OFFSET - 2.0;
 
-            // draw the first cricle, just the edge outline.
-            ui.painter()
-                .circle_stroke(port_pos, radius, self.style.edge);
+                    let radius = self.style.edge.width * 3.0;
 
-            // draw the second circle which is the filled "inside".
-            ui.painter().circle_filled(
-                port_pos,
-                radius - self.style.edge.width * 0.75,
-                self.style.fill,
-            );
+                    ui.painter().circle_stroke(pos, radius, self.style.edge);
+                    ui.painter().circle_filled(pos, radius, self.style.fill);
+                }
+
+                crate::PortKind::Input => {
+                    // draw the port closer to the block.
+                    pos.y += PORT_OFFSET;
+
+                    self.draw_arrow_tip(ui, pos, None);
+                }
+            }
         }
     }
 
@@ -306,6 +335,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
 
     fn draw_edges(&mut self, ui: &mut egui::Ui, scene_rect: egui::Rect) {
         let mut field = self.build_field(scene_rect);
+
         let id = ui.make_persistent_id("cfg_edge_cache_v1");
         let mut routed_polylines: Vec<Vec<egui::Pos2>> = Vec::new();
 
@@ -332,7 +362,6 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
             let mut astar = AStar::new(&field);
 
             if let Some(poly) = astar.find_path(from, to) {
-                // field.add_polyline_penalty(&poly, self.style.edge.width);
                 routed_polylines.push(poly);
             }
         }
