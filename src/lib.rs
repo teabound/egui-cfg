@@ -10,7 +10,7 @@ use petgraph::{
     visit::{EdgeRef, IntoEdgeReferences},
 };
 
-pub trait BlockLike {
+pub trait BlockLike: Clone {
     fn title(&self) -> &str;
     fn body_lines(&self) -> &[String];
     fn is_entry(&self) -> bool {
@@ -21,11 +21,21 @@ pub trait BlockLike {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub enum EdgeKind {
     Taken,
     FallThrough,
     Unconditional,
+}
+
+pub trait EdgeLike: Clone {
+    fn kind(&self) -> EdgeKind;
+}
+
+impl EdgeLike for EdgeKind {
+    fn kind(&self) -> EdgeKind {
+        *self
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -58,9 +68,9 @@ impl From<&LayoutConfig> for rust_sugiyama::configure::Config {
     }
 }
 
-pub fn get_block_rectangle(
+pub fn get_block_rectangle<N: BlockLike>(
     ui: &Ui,
-    block: &dyn BlockLike,
+    block: &N,
     style: &NodeStyle,
 ) -> (Rect, std::sync::Arc<Galley>) {
     // where the block that we're going to draw starts.
@@ -91,14 +101,14 @@ pub fn get_block_rectangle(
     (rect, body_galley)
 }
 
-pub fn get_cfg_layout<N: BlockLike + Clone, E: Clone>(
+pub fn get_cfg_layout<N: BlockLike, E: Clone>(
     ui: &Ui,
     graph: &StableGraph<N, E>,
     config: &LayoutConfig,
     style: &NodeStyle,
 ) -> CfgLayout {
     // Get the block rectangle to use as the vertex size.
-    let vertex_size = |x: NodeIndex, n: &N| {
+    let vertex_size = |_: NodeIndex, n: &N| {
         let rect = get_block_rectangle(ui, n, style).0;
         (rect.width() as _, rect.height() as f64)
     };
