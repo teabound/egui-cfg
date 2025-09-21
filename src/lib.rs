@@ -2,8 +2,8 @@ pub mod route;
 pub mod style;
 pub mod view;
 
-use crate::style::{NodeStyle, approx_block_height};
-use egui::Rect;
+use crate::style::NodeStyle;
+use egui::{Color32, Galley, Pos2, Rect, Ui, vec2};
 use petgraph::{
     graph::NodeIndex,
     stable_graph::StableGraph,
@@ -28,37 +28,11 @@ pub enum EdgeKind {
     Unconditional,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum PortKind {
-    Input,
-    Output,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PortSlot {
-    pub node: NodeIndex,
-    pub slot: usize,
-    pub kind: PortKind,
-}
-
-impl PortSlot {
-    pub fn new(node: NodeIndex, slot: usize, kind: PortKind) -> Self {
-        Self { node, slot, kind }
-    }
-}
-
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub struct PortLine {
-    pub from: PortSlot,
-    pub to: PortSlot,
-}
-
-#[derive(Clone, Debug)]
-pub struct CfgLayout<N: BlockLike + Clone, E: Clone> {
+#[derive(Clone, Debug, Default)]
+pub struct CfgLayout {
     pub coords: Vec<(NodeIndex, (f64, f64))>,
     pub width: f64,
     pub height: f64,
-    pub graph: StableGraph<N, E>,
 }
 
 #[derive(Clone, Debug)]
@@ -69,7 +43,7 @@ pub struct LayoutConfig {
 impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
-            vertex_spacing: 5.0,
+            vertex_spacing: 30.0,
         }
     }
 }
@@ -84,16 +58,49 @@ impl From<&LayoutConfig> for rust_sugiyama::configure::Config {
     }
 }
 
-pub fn layout_graph<N: BlockLike + Clone, E: Clone>(
-    graph: &StableGraph<N, E>,
+pub fn get_block_rectangle(
+    ui: &Ui,
+    block: &dyn BlockLike,
     style: &NodeStyle,
+) -> (Rect, std::sync::Arc<Galley>) {
+    // where the block that we're going to draw starts.
+    let block_position = Pos2::new(0.0, 0.0);
+
+    // get the width of the content (the size of the node without the padding).
+    let content_width = style.size.x - style.padding.x * 2.0;
+
+    let body_text = block.body_lines().join("\n");
+
+    // get the text galley so we can get information related to it.
+    let body_galley = ui.fonts(|f| {
+        f.layout(
+            body_text,
+            style.text_font.clone(),
+            Color32::WHITE,
+            content_width,
+        )
+    });
+
+    // ge the total size of the height including the padding, the text and the header.
+    let block_height = style.header_height + style.padding.y * 2.0 + body_galley.size().y;
+
+    // create a rectangle starting from the start of our block and is the size we've calculated
+    // from the content in the block.
+    let rect = Rect::from_min_size(block_position, vec2(style.size.x, block_height));
+
+    (rect, body_galley)
+}
+
+pub fn get_cfg_layout<N: BlockLike + Clone, E: Clone>(
+    ui: &Ui,
+    graph: &StableGraph<N, E>,
     config: &LayoutConfig,
-) -> CfgLayout<N, E> {
-    // we approximate the size of the node so sugiyama can place vertices accordingly.
-    let vertex_size = |_: NodeIndex, n: &N| {
-        let w = style.size.x as f64;
-        let h = approx_block_height(n, style) as f64;
-        (w, h)
+    style: &NodeStyle,
+) -> CfgLayout {
+    // Get the block rectangle to use as the vertex size.
+    let vertex_size = |x: NodeIndex, n: &N| {
+        let rect = get_block_rectangle(ui, n, style).0;
+        (rect.width() as _, rect.height() as f64)
     };
 
     let mut graph = graph.clone();
@@ -128,6 +135,5 @@ pub fn layout_graph<N: BlockLike + Clone, E: Clone>(
         coords,
         width,
         height,
-        graph: graph.clone(),
     }
 }
