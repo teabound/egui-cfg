@@ -2,10 +2,13 @@ use std::collections::HashMap;
 
 use crate::BlockLike;
 use crate::CfgLayout;
+use crate::EdgeLike;
 use crate::LayoutConfig;
 use crate::get_cfg_layout;
 use crate::route::{AStar, CostField, Grid};
 use crate::style::NodeStyle;
+use egui::Id;
+use egui::emath::easing;
 use egui::{
     Align2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
@@ -41,17 +44,23 @@ pub struct PortLine {
     pub to: PortSlot,
 }
 
-pub struct CfgView<'a, N: BlockLike + Clone, E: Clone> {
+pub struct CfgView<'a, N: BlockLike, E: EdgeLike> {
     graph: StableGraph<N, E>,
     layout_config: LayoutConfig,
     block_rects: HashMap<NodeIndex, Rect>,
     port_positions: HashMap<PortSlot, Pos2>,
     port_lines: Vec<PortLine>,
     pub style: &'a NodeStyle,
+    selected: &'a mut Option<NodeIndex>,
 }
 
-impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
-    pub fn new(graph: StableGraph<N, E>, config: LayoutConfig, style: &'a NodeStyle) -> Self {
+impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
+    pub fn new(
+        graph: StableGraph<N, E>,
+        config: LayoutConfig,
+        selected: &'a mut Option<NodeIndex>,
+        style: &'a NodeStyle,
+    ) -> Self {
         Self {
             graph,
             layout_config: config,
@@ -59,6 +68,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
             block_rects: HashMap::new(),
             port_lines: Vec::new(),
             port_positions: HashMap::new(),
+            selected,
         }
     }
 
@@ -74,6 +84,36 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
         bounds.expand(expand.unwrap_or(100.0))
     }
 
+    fn handle_block_interaction(&mut self, ui: &mut Ui, rect: &Rect, node: &NodeIndex) {
+        let id = ui.make_persistent_id(("node", node.index()));
+
+        let response = ui.interact(*rect, id, egui::Sense::click());
+
+        if response.clicked() {
+            *self.selected = Some(*node)
+        }
+
+        let glow_on = response.hovered() || *self.selected == Some(*node);
+
+        // goes from 0 to 1 over time, once we've hovered or selected.
+        let t = ui.ctx().animate_bool(id, glow_on) * 0.4;
+
+        if t > 0.0 {
+            let p = ui.painter();
+
+            // we will increase the outline over time.
+            let outline_width = 4.0 * easing::back_out(t);
+
+            p.rect(
+                *rect,
+                CornerRadius::same(self.style.rounding),
+                Color32::TRANSPARENT,
+                Stroke::new(outline_width, self.style.select.gamma_multiply(0.50)),
+                StrokeKind::Outside,
+            );
+        }
+    }
+
     /// This will draw blocks in the egui ui panel, and also push the position on the
     /// block rectangle to a hashmap, so that we can use it later.
     fn assign_and_draw_blocks(&mut self, ui: &mut Ui, layout: &CfgLayout) {
@@ -81,16 +121,18 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
             let (x, y) = (coords.0 as f32, coords.1 as f32);
 
             // get the target basic block from the graph.
-            let block = &self.graph[*node];
+            let block = self.graph[*node].clone();
 
             let style = self.style;
 
-            let (mut block_rectangle, body_galley) = crate::get_block_rectangle(ui, block, style);
+            // get the rectangle of our basic block or just node.
+            let (mut block_rectangle, body_galley) = crate::get_block_rectangle(ui, &block, style);
 
             // give the rectangle the correct position.
             block_rectangle.set_center(Pos2::new(x, y));
 
-            self.block_rects.insert(*node, block_rectangle);
+            // TODO: have a setting that disables interaction somehow.
+            self.handle_block_interaction(ui, &block_rectangle, node);
 
             let corner_rounding = CornerRadius::same(style.rounding);
 
@@ -144,6 +186,9 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
             );
 
             ui.painter().galley(text_pos, body_galley, Color32::WHITE);
+
+            // add our newly created block rectangle.
+            self.block_rects.insert(*node, block_rectangle);
         }
     }
 
