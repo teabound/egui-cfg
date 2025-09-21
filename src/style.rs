@@ -13,6 +13,7 @@ pub struct NodeStyle {
     pub padding: egui::Vec2,
     pub rounding: u8,
     pub fill: Color32,
+    pub select: Color32,
     pub header_fill: Color32,
     pub stroke: Stroke,
     /// The height of the header, or title box.
@@ -22,7 +23,6 @@ pub struct NodeStyle {
     pub edge: Stroke,
     pub arrow_len: f32,
     pub arrow_w: f32,
-    pub side_lane: f32,
 }
 
 impl NodeStyle {
@@ -57,7 +57,7 @@ impl NodeStyle {
             edge: non_interactive.fg_stroke,
             arrow_len: spacing.icon_width,
             arrow_w: spacing.icon_width_inner,
-            side_lane: spacing.indent * 3.0,
+            select: style.visuals.selection.stroke.color,
         }
     }
 }
