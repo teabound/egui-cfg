@@ -67,11 +67,3 @@ impl Default for NodeStyle {
         Self::from_style(&egui::Style::default())
     }
 }
-
-pub fn approx_block_height(block: &dyn BlockLike, style: &NodeStyle) -> f32 {
-    // crude but effective: monospace lines ~= 1.25 * point size.
-    let line_h = style.text_font.size * 1.25;
-    let body_h = (block.body_lines().len() as f32) * line_h;
-
-    style.header_height + style.padding.y + body_h + style.padding.y
-}

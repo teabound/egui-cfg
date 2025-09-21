@@ -1,36 +1,64 @@
 use std::collections::HashMap;
 
+use crate::BlockLike;
 use crate::CfgLayout;
+use crate::LayoutConfig;
+use crate::get_cfg_layout;
 use crate::route::{AStar, CostField, Grid};
 use crate::style::NodeStyle;
-use crate::{BlockLike, EdgeKind, PortKind, PortLine, PortSlot};
 use egui::{
     Align2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
-use petgraph::graph::{EdgeIndex, NodeIndex};
-use petgraph::visit::{EdgeRef, IntoEdgeReferences};
+use petgraph::graph::NodeIndex;
+use petgraph::prelude::StableGraph;
+use petgraph::visit::EdgeRef;
 
 /// The offset from the port to the basic block rectangle.
 const PORT_OFFSET: f32 = 4.0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PortKind {
+    Input,
+    Output,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PortSlot {
+    pub node: NodeIndex,
+    pub slot: usize,
+    pub kind: PortKind,
+}
+
+impl PortSlot {
+    pub fn new(node: NodeIndex, slot: usize, kind: PortKind) -> Self {
+        Self { node, slot, kind }
+    }
+}
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub struct PortLine {
+    pub from: PortSlot,
+    pub to: PortSlot,
+}
+
 pub struct CfgView<'a, N: BlockLike + Clone, E: Clone> {
-    pub layout: &'a CfgLayout<N, E>,
-    pub style: &'a NodeStyle,
+    graph: StableGraph<N, E>,
+    layout_config: LayoutConfig,
     block_rects: HashMap<NodeIndex, Rect>,
     port_positions: HashMap<PortSlot, Pos2>,
     port_lines: Vec<PortLine>,
-    cached_lines: Option<Vec<Vec<egui::Pos2>>>,
+    pub style: &'a NodeStyle,
 }
 
 impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
-    pub fn new(layout: &'a CfgLayout<N, E>, style: &'a NodeStyle) -> Self {
+    pub fn new(graph: StableGraph<N, E>, config: LayoutConfig, style: &'a NodeStyle) -> Self {
         Self {
-            layout,
+            graph,
+            layout_config: config,
             style,
             block_rects: HashMap::new(),
             port_lines: Vec::new(),
             port_positions: HashMap::new(),
-            cached_lines: None,
         }
     }
 
@@ -46,42 +74,21 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
         bounds.expand(expand.unwrap_or(100.0))
     }
 
-    // This will draw blocks in the egui ui panel, and also push the position on the
-    // block rectangle to a hashmap, so that we can use it later.
-    fn assign_and_draw_blocks(&mut self, ui: &mut Ui) {
-        for (node, coords) in &self.layout.coords {
+    /// This will draw blocks in the egui ui panel, and also push the position on the
+    /// block rectangle to a hashmap, so that we can use it later.
+    fn assign_and_draw_blocks(&mut self, ui: &mut Ui, layout: &CfgLayout) {
+        for (node, coords) in &layout.coords {
             let (x, y) = (coords.0 as f32, coords.1 as f32);
 
             // get the target basic block from the graph.
-            let block = &self.layout.graph[*node];
+            let block = &self.graph[*node];
 
             let style = self.style;
 
-            // where the block that we're going to draw starts.
-            let block_position = Pos2::new(x, y);
+            let (mut block_rectangle, body_galley) = crate::get_block_rectangle(ui, block, style);
 
-            // get the width of the content (the size of the node without the padding).
-            let content_width = style.size.x - style.padding.x * 2.0;
-
-            let body_text = block.body_lines().join("\n");
-
-            // get the text galley so we can get information related to it.
-            let body_galley = ui.fonts(|f| {
-                f.layout(
-                    body_text,
-                    style.text_font.clone(),
-                    Color32::WHITE,
-                    content_width,
-                )
-            });
-
-            // ge the total size of the height including the padding, the text and the header.
-            let block_height = style.header_height + style.padding.y * 2.0 + body_galley.size().y;
-
-            // create a rectangle starting from the start of our block and is the size we've calculated
-            // from the content in the block.
-            let block_rectangle =
-                Rect::from_min_size(block_position, vec2(style.size.x, block_height));
+            // give the rectangle the correct position.
+            block_rectangle.set_center(Pos2::new(x, y));
 
             self.block_rects.insert(*node, block_rectangle);
 
@@ -157,8 +164,8 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
     }
 
     fn assign_port_positions(&mut self) {
-        for node in self.layout.graph.node_indices() {
-            let graph = &self.layout.graph;
+        for node in self.graph.node_indices() {
+            let graph = &self.graph;
 
             // get the indegree of hte current node.
             let inputs = graph.neighbors_directed(node, petgraph::Incoming).count();
@@ -214,7 +221,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
     fn draw_ports(&mut self, ui: &mut egui::Ui) {
         for (slot, mut pos) in self.port_positions.clone() {
             match slot.kind {
-                crate::PortKind::Output => {
+                PortKind::Output => {
                     // draw the port closer to the block.
                     pos.y -= PORT_OFFSET - 2.0;
 
@@ -224,7 +231,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
                     ui.painter().circle_filled(pos, radius, self.style.fill);
                 }
 
-                crate::PortKind::Input => {
+                PortKind::Input => {
                     // draw the port closer to the block.
                     pos.y += PORT_OFFSET;
 
@@ -261,7 +268,7 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
             target_ports.into_iter().map(|(slot, _)| slot).collect()
         };
 
-        for node in self.layout.graph.node_indices() {
+        for node in self.graph.node_indices() {
             let ports = sorted_ports(node, PortKind::Output);
 
             if ports.is_empty() {
@@ -269,7 +276,6 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
             }
 
             let mut sorted_out_edges: Vec<(petgraph::graph::EdgeIndex, NodeIndex)> = self
-                .layout
                 .graph
                 .edges_directed(node, petgraph::Direction::Outgoing)
                 .map(|e| (e.id(), e.target()))
@@ -297,7 +303,6 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
 
                 // collect and sort the incoming edges from the target node.
                 let mut incoming: Vec<(petgraph::graph::EdgeIndex, NodeIndex)> = self
-                    .layout
                     .graph
                     .edges_directed(*target_node, petgraph::Direction::Incoming)
                     .map(|e| (e.id(), e.source()))
@@ -376,14 +381,15 @@ impl<'a, N: BlockLike + Clone, E: Clone> CfgView<'a, N, E> {
     }
 
     pub fn show(&mut self, ui: &mut Ui, scene_rect: &mut Rect) {
+        // calculate the layout of the graph.
+        // btw this should be pretty cheap to calculate.
+        let layout = get_cfg_layout(ui, &self.graph, &self.layout_config, &self.style);
+
         egui::Scene::new()
-            .max_inner_size([
-                self.layout.width as f32 + 800.0,
-                self.layout.height as f32 + 800.0,
-            ])
+            .max_inner_size([layout.width as f32 + 800.0, layout.height as f32 + 800.0])
             .zoom_range(0.1..=2.0)
             .show(ui, scene_rect, |ui| {
-                self.assign_and_draw_blocks(ui);
+                self.assign_and_draw_blocks(ui, &layout);
                 self.assign_port_positions();
                 self.assign_port_lines();
                 self.draw_edges(ui, self.get_world_rect(None));
