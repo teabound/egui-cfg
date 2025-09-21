@@ -11,9 +11,9 @@ pub struct NodeStyle {
     pub size: egui::Vec2,
     /// The n,w,e,s padding inside of the node.
     pub padding: egui::Vec2,
+    pub button_padding: egui::Vec2,
     pub rounding: u8,
     pub fill: Color32,
-    pub select: Color32,
     pub header_fill: Color32,
     pub stroke: Stroke,
     /// The height of the header, or title box.
@@ -23,6 +23,8 @@ pub struct NodeStyle {
     pub edge: Stroke,
     pub arrow_len: f32,
     pub arrow_w: f32,
+    pub select: Stroke,
+    pub select_bg: Color32,
 }
 
 impl NodeStyle {
@@ -46,7 +48,8 @@ impl NodeStyle {
 
         Self {
             size: vec2(260.0, 120.0),
-            padding: spacing.button_padding,
+            padding: Vec2::new(10.0, 10.0),
+            button_padding: spacing.button_padding,
             rounding: non_interactive.rounding().nw,
             fill: visuals.code_bg_color,
             header_fill: inactive.bg_fill,
@@ -57,7 +60,8 @@ impl NodeStyle {
             edge: non_interactive.fg_stroke,
             arrow_len: spacing.icon_width,
             arrow_w: spacing.icon_width_inner,
-            select: style.visuals.selection.stroke.color,
+            select: style.visuals.selection.stroke,
+            select_bg: style.visuals.selection.bg_fill,
         }
     }
 }
