@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::BlockLike;
 use crate::CfgLayout;
+use crate::EdgeKind;
 use crate::EdgeLike;
 use crate::LayoutConfig;
 use crate::get_cfg_layout;
@@ -108,7 +109,7 @@ impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
                 *rect,
                 CornerRadius::same(self.style.rounding),
                 Color32::TRANSPARENT,
-                Stroke::new(outline_width, self.style.select.gamma_multiply(0.50)),
+                Stroke::new(outline_width, self.style.select.color.gamma_multiply(0.50)),
                 StrokeKind::Outside,
             );
         }
@@ -170,7 +171,7 @@ impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
             // block title, could be empty or not.
             let label = format!("{}", block.title());
             // NOTE: have an option to put the title in the middle of the header rectangle.
-            let label_pos = header_rectangle.left_center() + vec2(style.padding.x, 0.0);
+            let label_pos = header_rectangle.left_center() + vec2(style.button_padding.x, 0.0);
 
             ui.painter().text(
                 label_pos,
@@ -241,7 +242,13 @@ impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
         }
     }
 
-    fn draw_arrow_tip(&self, ui: &mut egui::Ui, tip: egui::Pos2, dir: Option<egui::Vec2>) {
+    fn draw_arrow_tip(
+        &self,
+        ui: &mut egui::Ui,
+        tip: egui::Pos2,
+        dir: Option<egui::Vec2>,
+        selected: bool,
+    ) {
         let size = self.style.edge.width * 4.0;
 
         // get the unit direction of the arrow
@@ -256,14 +263,26 @@ impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
         let p1 = base + perp;
         let p2 = base - perp;
 
-        ui.painter().add(egui::Shape::convex_polygon(
-            vec![tip, p1, p2],
-            self.style.edge.color,
-            self.style.edge,
-        ));
+        let (color, edge) = {
+            if selected {
+                (self.style.select.color, self.style.select)
+            } else {
+                (self.style.edge.color, self.style.edge)
+            }
+        };
+
+        ui.painter()
+            .add(egui::Shape::convex_polygon(vec![tip, p1, p2], color, edge));
     }
 
     fn draw_ports(&mut self, ui: &mut egui::Ui) {
+        let target_ports: Vec<_> = self.selected.map_or(Vec::new(), |target| {
+            self.port_lines
+                .iter()
+                .filter_map(|l| (l.from.node == target).then_some(l.to))
+                .collect()
+        });
+
         for (slot, mut pos) in self.port_positions.clone() {
             match slot.kind {
                 PortKind::Output => {
@@ -280,7 +299,7 @@ impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
                     // draw the port closer to the block.
                     pos.y += PORT_OFFSET;
 
-                    self.draw_arrow_tip(ui, pos, None);
+                    self.draw_arrow_tip(ui, pos, None, target_ports.contains(&slot));
                 }
             }
         }
@@ -387,16 +406,58 @@ impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
         let mut field = self.build_field(scene_rect);
 
         let id = ui.make_persistent_id("cfg_edge_cache_v1");
-        let mut routed_polylines: Vec<Vec<egui::Pos2>> = Vec::new();
+        let mut routed_polylines: Vec<(Vec<egui::Pos2>, PortLine)> = Vec::new();
 
         if let Some(lines) = ui
             .ctx()
-            .data_mut(|d| d.get_persisted::<Vec<Vec<egui::Pos2>>>(id))
+            .data_mut(|d| d.get_persisted::<Vec<(Vec<egui::Pos2>, PortLine)>>(id))
         {
-            for poly in lines {
+            for (poly, pl) in lines {
+                let edge_kind = self
+                    .graph
+                    .find_edge(pl.from.node, pl.to.node)
+                    .and_then(|e| self.graph.edge_weight(e))
+                    .map(|e| e.kind());
+
+                let should_dash = match edge_kind {
+                    Some(EdgeKind::FallThrough) => true,
+                    _ => false,
+                };
+
+                let is_selected = match self.selected.clone() {
+                    Some(node) if pl.from.node == node => true,
+                    _ => false,
+                };
+
+                if should_dash && is_selected {
+                    let stroke = Stroke::new(2.0, self.style.select_bg);
+
+                    ui.painter().add(egui::Shape::dotted_line(
+                        &poly,
+                        self.style.select.color.gamma_multiply(0.5),
+                        12.0,
+                        2.0,
+                    ));
+
+                    continue;
+                }
+
+                if is_selected {
+                    let stroke = Stroke::new(
+                        self.style.select.width,
+                        self.style.select.color.gamma_multiply(0.5),
+                    );
+
+                    ui.painter()
+                        .add(egui::Shape::line(poly.clone(), self.style.select));
+
+                    continue;
+                }
+
                 ui.painter()
                     .add(egui::Shape::line(poly.clone(), self.style.edge));
             }
+
             return;
         }
 
@@ -412,11 +473,11 @@ impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
             let mut astar = AStar::new(&field);
 
             if let Some(poly) = astar.find_path(from, to) {
-                routed_polylines.push(poly);
+                routed_polylines.push((poly, pl.clone()));
             }
         }
 
-        for poly in routed_polylines.iter() {
+        for (poly, _) in routed_polylines.iter() {
             ui.painter()
                 .add(egui::Shape::line(poly.clone(), self.style.edge));
         }
