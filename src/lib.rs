@@ -13,12 +13,6 @@ use petgraph::{
 pub trait BlockLike: Clone {
     fn title(&self) -> &str;
     fn body_lines(&self) -> &[String];
-    fn is_entry(&self) -> bool {
-        false
-    }
-    fn is_exit(&self) -> bool {
-        false
-    }
 }
 
 #[derive(Clone, Debug, Copy)]
