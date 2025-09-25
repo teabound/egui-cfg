@@ -543,16 +543,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
 
 [[package]]
-name = "cfg"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "petgraph",
- "rust-sugiyama",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -808,6 +798,16 @@ dependencies = [
  "profiling",
  "smallvec",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "egui-cfg"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "petgraph",
+ "rust-sugiyama",
 ]
 
 [[package]]

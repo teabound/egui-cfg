@@ -1,7 +1,14 @@
 [package]
-name = "cfg"
+name = "egui-cfg"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+keywords = ["egui", "cfg", "control flow graph", "visualization", "graph"]
+description = "egui library for displaying control flow graphs using petgraph."
+repository = "https://github.com/teabound/egui-cfg"
+homepage = "https://github.com/teabound/egui-cfg"
+documentation = "https://docs.rs/egui-cfg"
+readme = "README.md"
 
 [dependencies]
 egui = "0.32"
