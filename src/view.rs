@@ -8,11 +8,8 @@ use crate::LayoutConfig;
 use crate::get_cfg_layout;
 use crate::route::{AStar, CostField, Grid};
 use crate::style::NodeStyle;
-use egui::Id;
 use egui::emath::easing;
-use egui::{
-    Align2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
-};
+use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, Ui, pos2, vec2};
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::StableGraph;
 use petgraph::visit::EdgeRef;
@@ -90,6 +87,11 @@ impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
 
         let response = ui.interact(*rect, id, egui::Sense::click());
 
+        // if we clicked on something that wasn't a rectangle.
+        if ui.input(|i| i.pointer.any_pressed()) && !response.hovered() {
+            *self.selected = None;
+        }
+
         if response.clicked() {
             *self.selected = Some(*node)
         }
@@ -100,12 +102,10 @@ impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
         let t = ui.ctx().animate_bool(id, glow_on) * 0.4;
 
         if t > 0.0 {
-            let p = ui.painter();
-
             // we will increase the outline over time.
             let outline_width = 4.0 * easing::back_out(t);
 
-            p.rect(
+            ui.painter().rect(
                 *rect,
                 CornerRadius::same(self.style.rounding),
                 Color32::TRANSPARENT,
@@ -135,14 +135,15 @@ impl<'a, N: BlockLike, E: EdgeLike> CfgView<'a, N, E> {
             // TODO: have a setting that disables interaction somehow.
             self.handle_block_interaction(ui, &block_rectangle, node);
 
-            let corner_rounding = CornerRadius::same(style.rounding);
-
             // draw the entire node block.
             ui.painter().rect(
                 block_rectangle,
-                corner_rounding,
+                CornerRadius::same(style.rounding),
                 style.fill,
-                style.stroke,
+                egui::Stroke {
+                    color: style.header_fill,
+                    ..style.stroke
+                },
                 StrokeKind::Inside,
             );
 
