@@ -1,4 +1,4 @@
-use cfg::{BlockLike, EdgeKind, LayoutConfig, style::NodeStyle, view::CfgView};
+use egui_cfg::{BlockLike, EdgeKind, LayoutConfig, style::NodeStyle, view::CfgView};
 
 use eframe::egui::{self, Rect, pos2, vec2};
 use eframe::{self};
@@ -34,7 +34,7 @@ fn build_dummy_cfg() -> StableGraph<BasicBlock, EdgeKind> {
     let cond = g.add_node(BasicBlock {
         addr: 0x1005,
         title: "cmp and branch".into(),
-        code: vec!["cmp rdi, 0".into(), "jl then_else".into()],
+        code: vec!["cmp rdi, 0".into(), "jl then".into()],
     });
 
     let then_ = g.add_node(BasicBlock {
