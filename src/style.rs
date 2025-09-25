@@ -7,7 +7,6 @@ use crate::BlockLike;
 /// a.k.a how it actaully appears when rendered.
 #[derive(Clone)]
 pub struct NodeStyle {
-    /// The size of the whole node rectangle.
     pub size: egui::Vec2,
     /// The n,w,e,s padding inside of the node.
     pub padding: egui::Vec2,
@@ -21,8 +20,6 @@ pub struct NodeStyle {
     pub label_font: FontId,
     pub text_font: FontId,
     pub edge: Stroke,
-    pub arrow_len: f32,
-    pub arrow_w: f32,
     pub select: Stroke,
     pub select_bg: Color32,
 }
@@ -35,12 +32,6 @@ impl NodeStyle {
             .cloned()
             .unwrap_or(FontId::monospace(12.0));
 
-        let body = style
-            .text_styles
-            .get(&TextStyle::Body)
-            .cloned()
-            .unwrap_or(FontId::proportional(12.0));
-
         let visuals = &style.visuals;
         let non_interactive = &visuals.widgets.noninteractive;
         let inactive = &visuals.widgets.inactive;
@@ -50,7 +41,7 @@ impl NodeStyle {
             size: vec2(260.0, 120.0),
             padding: Vec2::new(10.0, 10.0),
             button_padding: spacing.button_padding,
-            rounding: non_interactive.rounding().nw,
+            rounding: non_interactive.corner_radius.nw,
             fill: visuals.code_bg_color,
             header_fill: inactive.bg_fill,
             stroke: non_interactive.bg_stroke,
@@ -58,8 +49,6 @@ impl NodeStyle {
             label_font: mono.clone(),
             text_font: mono,
             edge: non_interactive.fg_stroke,
-            arrow_len: spacing.icon_width,
-            arrow_w: spacing.icon_width_inner,
             select: style.visuals.selection.stroke,
             select_bg: style.visuals.selection.bg_fill,
         }
