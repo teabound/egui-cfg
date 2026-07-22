@@ -71,12 +71,17 @@ pub fn get_block_rectangle<N: BlockLike>(
     // get the text galley so we can get information related to it.
     let body_galley = ui.fonts_mut(|f| f.layout_job(block.body_layouts()));
 
+    // calculate block width
+    let content_width = body_galley.size().x;
+    let block_width = content_width + style.padding.x * 2.0;
+    let final_width = block_width.max(style.size.x);
+
     // ge the total size of the height including the padding, the text and the header.
     let block_height = style.header_height + style.padding.y * 2.0 + body_galley.size().y;
 
     // create a rectangle starting from the start of our block and is the size we've calculated
     // from the content in the block.
-    let rect = Rect::from_min_size(block_position, vec2(style.size.x, block_height));
+    let rect = Rect::from_min_size(block_position, vec2(final_width, block_height));
 
     (rect, body_galley)
 }
